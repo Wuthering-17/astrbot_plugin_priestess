@@ -3,6 +3,18 @@
 This repository contains material derived from, or distributed together with, the following
 third-party works. Each remains under its own license.
 
+## Priestess-bot
+
+- Source: https://github.com/Billtranscend/Priestess-bot
+- Original author: Billtranscend and upstream contributors.
+- Adaptation base: commit `59e2be8ee0006a031a903cce1d7b2d72138ba8f5`.
+- Used in: the original `plugins/` tree and AstrBot adaptations under
+  `priestess_features/`, with the upstream Git history retained.
+- License: MIT. The original copyright and full license text remain in `LICENSE`.
+- The maintainer of this repository provides AstrBot interface adaptation,
+  compatibility fixes, packaging, and distribution. Original authorship of the
+  upstream features remains with the original authors and contributors.
+
 ## astrbot_plugin_sklands
 
 - Source: https://github.com/SciNancy/astrbot_plugin_sklands

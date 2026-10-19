@@ -19,10 +19,10 @@ from astrbot.api import logger
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
-from ..api import SklandAPI, SklandLoginAPI
-from ..db import Character, SkUser, get_default_ef_character, get_session
-from ..exception import LoginException
-from ..schemas import CRED
+from ...api import SklandAPI, SklandLoginAPI
+from ...db import Character, SkUser, get_default_ef_character, get_session
+from ...exception import LoginException
+from ...schemas import CRED
 
 from .builds import CARD_URL, BuildStore, extract
 

@@ -1,29 +1,66 @@
-# Priestess Bot
+# Priestess Bot — AstrBot 接口适配版
 
-## AstrBot plugin port
+将 Priestess-bot 的明日方舟、明日方舟：终末地功能接入现有 AstrBot QQ 机器人。
 
-This repository is being adapted as a native AstrBot plugin for AstrBot 4.28.2+
-with NapCat / OneBot v11. The local port currently includes Skland binding and
-queries, role selection, scheduled sign-in and Endfield gacha sync, sanity
-reminders, Endfield wiki and guide cards, event calendar notices, and automatic
-acceptance of group invitations, group gacha boards, and Heybox history import
-and undo, plus scheduled weekly reports and an account health audit. The migration
-is still incomplete: one QQ user can only bind one Skland account, and the
-weekly health job reports invalid bindings without removing them automatically.
+## 原作者与项目来源
 
-Install this repository from the AstrBot plugin page, or place it under
-`AstrBot/data/plugins/astrbot_plugin_priestess`. The plugin stores its database,
-tokens, and runtime cache under `data/plugin_data/astrbot-plugin-priestess/`.
+| 项目 | 原作者 | 本适配版使用的内容 |
+| --- | --- | --- |
+| [Priestess-bot](https://github.com/Billtranscend/Priestess-bot) | **Billtranscend** 及上游贡献者 | 原项目功能、终末地资料库、攻略、日历、周报及相关业务代码 |
+| [astrbot_plugin_sklands](https://github.com/SciNancy/astrbot_plugin_sklands) | **SciNancy** 及上游贡献者 | AstrBot 森空岛绑定、游戏数据请求、模型、模板与相关实现 |
+| [nonebot-plugin-skland](https://github.com/FrostN0v0/nonebot-plugin-skland) | **FrostN0v0** 及上游贡献者 | 原工程依赖及部分衍生模板，详见第三方声明 |
 
-The migrated Skland implementation is derived from
-[SciNancy/astrbot_plugin_sklands](https://github.com/SciNancy/astrbot_plugin_sklands)
-under its MIT license. Original Priestess-bot code and its license notices are
-preserved. AstrBot exposes both `/sk` commands and the Priestess command aliases
-listed in the plugin help. Do not replace the existing live bot with this branch
-until the remaining features have been ported and checked on the target NapCat.
+**本仓库维护者仅负责 AstrBot 接口适配、兼容性修复、打包和发布。原项目及相关功能的原创署名保留给上述原作者。**
 
-The original standalone NoneBot deployment remains documented below and uses
-`requirements-nonebot.txt`.
+本仓库保留上游 Git 历史、原始代码和版权声明。[LICENSE](LICENSE) 保留
+Billtranscend 的 MIT 许可证；其他来源及完整许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+## 安装与使用
+
+运行环境：**AstrBot 4.28.2+、Python 3.12+、NapCat / OneBot v11**。
+
+1. 在 AstrBot 的「插件」页面点击「＋」，上传发布 ZIP；也可以使用本仓库地址安装。
+2. 等待依赖安装并确认插件加载成功。
+3. 发送 `/skl绑定`，使用森空岛 App 扫码绑定。
+4. 发送 `/森空岛签到`，同时签到明日方舟和终末地。
+
+| 指令 | 作用 |
+| --- | --- |
+| `/skl帮助` | 查看指令帮助 |
+| `/skl绑定` 或 `/sk login` | 扫码绑定森空岛 |
+| `/森空岛签到` 或 `/sk sign` | 两款游戏一起签到 |
+| `/明日方舟签到` | 仅签到明日方舟 |
+| `/终末地签到` | 仅签到终末地 |
+| `/skl角色更新` | 更新绑定账号的游戏角色 |
+| `/zmd导入小黑盒 小黑盒ID` | 补回小黑盒中的早期终末地抽卡记录 |
+| `/zmd撤销小黑盒导入` | 撤销小黑盒导入记录 |
+
+每日自动签到时间为中国时间 **00:15（明日方舟）、00:20（终末地）**。
+数据和凭据存放在 `data/plugin_data/astrbot-plugin-priestess/`，不随仓库发布。
+
+小黑盒读取和本地图片渲染需要后台浏览器。默认使用 Playwright 自带的无界面 Chromium；
+Windows 未安装该内核时尝试已安装的 Edge、Chrome。每次创建临时浏览器会话，
+不加载个人浏览器配置或登录状态。其他环境可在 AstrBot 使用的 Python 中运行
+`python -m playwright install chromium` 安装内核。
+
+## 适配范围与验证
+
+当前包含森空岛绑定、双游戏签到、角色和抽卡查询、理智提醒、终末地资料库和攻略、
+日历、群内欧非榜、小黑盒导入与撤销、群周报、账号体检等接口。
+
+当前一个 QQ 仅支持绑定一个森空岛账号；上游的多账号管理、关键词词库等功能仍有适配差异，
+完整列表见 [ASTRBOT_PORT.md](ASTRBOT_PORT.md)。
+
+v0.1.4 已在 Windows 的 Python 3.12 环境结合 AstrBot 4.28.2 源码验证压缩包识别、
+完整入口导入、插件对象创建、空数据库初始化及后台 Edge 临时会话启动。
+真实森空岛签到、小黑盒账号数据读取及所有 QQ 群功能尚未完成端到端验证。
+
+修复记录见 [CHANGELOG.md](CHANGELOG.md)。
+
+## 上游原始项目说明（NoneBot 版本）
+
+以下保留上游工程说明，独立 NoneBot 部署使用 `requirements-nonebot.txt`。
+AstrBot 用户使用本页上方的安装方式和根目录的 `requirements.txt`。
 
 面向《明日方舟：终末地》与《明日方舟》玩家群的 QQ 群机器人，基于 NoneBot2 与 NapCat。
 A QQ group bot for Arknights: Endfield / Arknights communities, built on NoneBot2 and NapCat.

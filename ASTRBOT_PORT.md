@@ -43,8 +43,20 @@ single account under the QQ ID. Existing account data therefore needs an explici
 migration before it can be reused; copying the SQLite file is not sufficient.
 
 The port was prepared against AstrBot 4.28.2 and the OneBot v11 adapter source.
-Static parsing and whitespace checks are used during development. No live NapCat
-connection, integration run, or test suite has been used for this local branch.
+The v0.1.4 archive was extracted into an isolated workspace and checked using the
+local AstrBot instance's Python 3.12 environment and AstrBot 4.28.2 source. Checks
+passed for AstrBot archive validation, namespaced entry import, plugin object
+construction, empty database initialization, all packaged Python source files,
+and an actual headless Edge launch with a fresh temporary browser context.
+Browser fallback and Heybox fetch failure handling were also checked with
+controlled responses. Whitespace checks passed.
 
-The working copy is a local migration branch. No GitHub fork has been published
-and no pull request has been opened.
+No end-to-end validation of live Skland sign-in, real Heybox account records,
+or the complete QQ group feature set has been completed.
+
+## Attribution
+
+Original project: **Billtranscend/Priestess-bot**, with original copyright and MIT
+license retained. AstrBot Skland implementation: **SciNancy/astrbot_plugin_sklands**.
+The publishing repository's maintainer provides the AstrBot interface adaptation
+and compatibility maintenance. See `THIRD_PARTY_NOTICES.md` for all sources.

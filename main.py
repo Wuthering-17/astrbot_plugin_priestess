@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 
 import qrcode
 import astrbot.api.message_components as Comp
-from astrbot.api.event import filter, AstrMessageEvent, EventMessageType, MessageChain
+from astrbot.api.event import filter, AstrMessageEvent, MessageChain
 from astrbot.api.star import Context, Star
 from astrbot.api import logger
 
@@ -389,7 +389,7 @@ class SklandPlugin(Star):
         self._start_weekly_report_loop()
         self._start_health_loop()
 
-    @filter.event_message_type(EventMessageType.OTHER_MESSAGE)
+    @filter.event_message_type(filter.EventMessageType.OTHER_MESSAGE)
     async def on_onebot_group_lifecycle(self, event: AstrMessageEvent):
         """Handle OneBot invitation and bot membership events exposed by AstrBot."""
         raw = getattr(event.message_obj, "raw_message", None)

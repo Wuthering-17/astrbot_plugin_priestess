@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from datetime import datetime
 from pathlib import Path
 
-from playwright.async_api import async_playwright
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError, async_playwright
 from sqlalchemy import delete, func, select
 
 from ..db import Character, GachaRecord, get_ef_characters, get_session, get_user_by_platform
 from ..data_source import ef_gacha_pool_data
+from ..browser import BrowserUnavailableError, launch_browser
 from .guide import CN
 from .heybox_plan import Official, Plan, build_plan
 
@@ -22,6 +24,11 @@ USER_AGENT = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit
 FETCH_TIMEOUT = 15000
 FETCH_ATTEMPTS = 3
 COOLDOWN = 300
+logger = logging.getLogger("astrbot")
+
+
+class HeyboxFetchError(RuntimeError):
+    """A failure to retrieve usable Heybox records, suitable for a chat reply."""
 
 
 class HeyboxImporter:
@@ -33,7 +40,7 @@ class HeyboxImporter:
 
     async def _fetch_once(self, heybox_id: str) -> dict:
         async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+            browser = await launch_browser(playwright)
             try:
                 context = await browser.new_context(
                     device_scale_factor=1,
@@ -60,13 +67,27 @@ class HeyboxImporter:
         for attempt in range(FETCH_ATTEMPTS):
             try:
                 payload = await self._fetch_once(heybox_id)
+            except BrowserUnavailableError:
+                raise
             except Exception as error:
                 last_error = error
+                logger.warning(
+                    "[Priestess] Heybox fetch attempt %s/%s failed: %s",
+                    attempt + 1, FETCH_ATTEMPTS, type(error).__name__,
+                    exc_info=True,
+                )
                 continue
-            if payload.get("status") != "ok":
-                raise RuntimeError(f"小黑盒返回状态：{payload.get('status')}")
-            return payload.get("result") or {}
-        raise RuntimeError(f"小黑盒读取失败：{type(last_error).__name__ if last_error else 'unknown'}")
+            if not isinstance(payload, dict) or payload.get("status") != "ok":
+                raise HeyboxFetchError("小黑盒未返回可用数据，请确认小黑盒 ID 正确且已同步终末地抽卡记录。")
+            result = payload.get("result")
+            if not isinstance(result, dict) or not result:
+                raise HeyboxFetchError("小黑盒抽卡数据为空，请先在小黑盒内同步终末地抽卡记录。")
+            return result
+        if isinstance(last_error, PlaywrightTimeoutError):
+            raise HeyboxFetchError("读取小黑盒页面超时，请检查机器人访问小黑盒的网络连接后重试。") from last_error
+        raise HeyboxFetchError(
+            f"读取小黑盒数据失败（{type(last_error).__name__ if last_error else 'unknown'}），请管理员查看日志。"
+        ) from last_error
 
     def _pool_windows(self) -> dict[str, tuple[int, int]]:
         loaded = self.plugin.wiki.resolver()
@@ -183,7 +204,10 @@ class HeyboxImporter:
                     return "账号下没有终末地角色，请先发送 /skl角色更新。"
             try:
                 result = await self._fetch(heybox_id)
+            except (BrowserUnavailableError, HeyboxFetchError) as error:
+                return str(error)
             except Exception as error:
+                logger.exception("[Priestess] Unexpected Heybox fetch failure")
                 return f"读取小黑盒数据失败（{type(error).__name__}），请稍后再试。"
             role_id = str((result.get("user_info") or {}).get("uid") or "")
             character = next((char for char in characters if str(char.role_id) == role_id), None)

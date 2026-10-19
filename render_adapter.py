@@ -16,6 +16,8 @@ from datetime import datetime
 # Pillow 用于截图后裁剪右侧空白
 from PIL import Image
 
+from .browser import launch_browser
+
 from .schemas import (
     ArkCard,
     EndfieldCard,
@@ -221,7 +223,7 @@ async def _html_to_pic(
     file_name = output_path / f"skland_card_{datetime.now().strftime('%Y%m%d%H%M%S')}.png"
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch()
+        browser = await launch_browser(p)
         # 将 base_url 传给 new_page，使模板中的相对路径资源（CSS、图片）能正确解析
         page = await browser.new_page(
             viewport={"width": width, "height": max(height, 1200)},
