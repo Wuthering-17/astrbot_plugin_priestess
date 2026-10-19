@@ -14,6 +14,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import json
+import logging
 import operator
 import re
 import shutil
@@ -92,27 +93,55 @@ def http_client() -> httpx.AsyncClient:
     )
 
 
+async def fetch_json(client: httpx.AsyncClient, url: str, *, headers: dict | None = None) -> dict:
+    for attempt in range(3):
+        try:
+            response = await client.get(url, headers=headers)
+            response.raise_for_status()
+            value = response.json()
+            if not isinstance(value, dict):
+                raise ValueError("AKEData response is not a JSON object")
+            return value
+        except (httpx.TransportError, httpx.HTTPStatusError) as error:
+            if isinstance(error, httpx.HTTPStatusError) and error.response.status_code not in (429, 500, 502, 503, 504):
+                raise
+            if attempt == 2:
+                raise
+            logging.getLogger("astrbot").warning("[Priestess] AKEData 请求临时失败，重试 %s/2: %s", attempt + 1, url)
+            await asyncio.sleep(attempt + 1)
+
+
+async def cached_json(client: httpx.AsyncClient, url: str, path: Path, refresh: bool = False) -> dict:
+    if path.exists() and not refresh:
+        try:
+            value = json.loads(path.read_text("utf-8"))
+            if isinstance(value, dict):
+                return value
+        except (OSError, ValueError):
+            pass
+    value = await fetch_json(client, url)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".part")
+    temporary.write_text(json.dumps(value, ensure_ascii=False), "utf-8")
+    temporary.replace(path)
+    return value
+
+
 async def fetch_manifest(client: httpx.AsyncClient) -> dict:
     """The version list as the site has it now.
 
     Always read in full and past any cache: it is a few KB, and comparing its `latest` with the
     version in the index is the only check that cannot be fooled by a stale ETag or CDN copy.
     """
-    response = await client.get(MANIFEST_URL, headers={"Cache-Control": "no-cache", "Pragma": "no-cache"})
-    response.raise_for_status()
-    return response.json()
+    return await fetch_json(client, MANIFEST_URL, headers={"Cache-Control": "no-cache", "Pragma": "no-cache"})
 
 
-async def download_tables(client: httpx.AsyncClient, table_path: str, target: Path) -> None:
+async def download_tables(client: httpx.AsyncClient, table_path: str, target: Path, refresh: bool = False) -> None:
     target.mkdir(parents=True, exist_ok=True)
     for name in TABLES:
-        response = await client.get(f"{DATA_BASE}/{table_path}/{name}.json")
-        response.raise_for_status()
-        (target / f"{name}.json").write_bytes(response.content)
-    response = await client.get(MAPS_URL)
-    response.raise_for_status()
-    (target / "maps.json").write_bytes(response.content)
-    await download_stage_data(client, target)
+        await cached_json(client, f"{DATA_BASE}/{table_path}/{name}.json", target / f"{name}.json", refresh)
+    await cached_json(client, MAPS_URL, target / "maps.json", refresh)
+    await download_stage_data(client, target, refresh)
 
 
 def endgame_stage_ids(series: dict, tower_groups: dict) -> list[str]:
@@ -123,7 +152,7 @@ def endgame_stage_ids(series: dict, tower_groups: dict) -> list[str]:
     return stage_ids
 
 
-async def download_stage_data(client: httpx.AsyncClient, target: Path) -> None:
+async def download_stage_data(client: httpx.AsyncClient, target: Path, refresh: bool = False) -> None:
     """Spawner configs of the endgame scenes plus every buff their enemies are born with."""
 
     def table(name: str) -> dict:
@@ -132,19 +161,13 @@ async def download_stage_data(client: httpx.AsyncClient, target: Path) -> None:
     dungeons, enemies = table("DungeonTable"), table("EnemyTable")
     stage_ids = [s for s in endgame_stage_ids(table("DungeonSeriesTable"), table("SeasonTowerGameGroupTable")) if s in dungeons]
     scenes = {dungeons[s].get("sceneId") for s in stage_ids}
-    response = await client.get(ASSET_INDEX_URL)
-    response.raise_for_status()
-    files = response.json()["datasets"]["json"]["files"]
+    asset_index = await cached_json(client, ASSET_INDEX_URL, target / "asset-index.json", refresh)
+    files = asset_index["datasets"]["json"]["files"]
     limit = asyncio.Semaphore(STAGE_FETCHES)
 
     async def fetch(path: str) -> dict:
         async with limit:
-            response = await client.get(f"{JSON_BASE}/{quote(path)}")
-            response.raise_for_status()
-        out = target / path
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_bytes(response.content)
-        return response.json()
+            return await cached_json(client, f"{JSON_BASE}/{quote(path)}", target / path, refresh)
 
     paths = [p for p in files if SAFE_PATH.match(p) and p.startswith("SpawnerConfig/") and p.split("/")[1] in scenes]
     configs = await asyncio.gather(*(fetch(p) for p in paths))

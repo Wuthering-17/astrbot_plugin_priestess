@@ -89,7 +89,7 @@ class EchoStore:
             if data["members"].pop(qq, None) is not None:
                 self._save(data)
 
-    async def collect(self, builds: BuildStore | None = None) -> dict[str, int]:
+    async def collect(self, builds: BuildStore | None = None, *, builds_only: bool = False) -> dict[str, int]:
         """Fetch every bound, non-opted-out member once; returns counters for logging.
 
         With `builds`, each member's card is read as well and their operators' equipment is stored there.
@@ -100,24 +100,32 @@ class EchoStore:
             stats = Counter()
             build_members = builds.load().get("members") or {} if builds else {}
             try:
-                await self._collect_into(data, stats, optout, builds, build_members)
+                await self._collect_into(data, stats, optout, builds, build_members, builds_only=builds_only)
             finally:  # also after a failure: members already fetched keep their new records, the others their old ones
                 data["schema"] = ECHO_SCHEMA
                 self._save(data)
-                if builds is not None:  # members dropped above (unbound, opted out, failing) leave the build statistics too
-                    builds.save({qq: member for qq, member in build_members.items() if qq in data["members"]})
+                if builds is not None:
+                    builds.save(build_members)
             return dict(stats)
 
-    async def _collect_into(self, data: dict, stats: Counter, optout: set[str], builds: BuildStore | None, build_members: dict) -> None:
+    async def _collect_into(self, data: dict, stats: Counter, optout: set[str], builds: BuildStore | None, build_members: dict, *, builds_only: bool = False) -> None:
         async with await get_session() as session:
             # Keep identifiers as plain strings; ORM objects expire after each token commit.
             binds = list((await session.execute(select(SkUser.id, SkUser.platform_user_id))).all())
+            bound_qqs = {str(qq) for _, qq in binds}
+            for qq in list(data["members"]):
+                if qq not in bound_qqs or qq in optout:
+                    data["members"].pop(qq, None)
+            for qq in list(build_members):
+                if qq not in bound_qqs or qq in optout:
+                    build_members.pop(qq, None)
             for done, (user_id, platform_user_id) in enumerate(binds, 1):
                 qq = str(platform_user_id)
                 if done % 20 == 0:
                     logger.info(f"War Echoes collection progress: {done}/{len(binds)} binds, {dict(stats)}")
                 if qq in optout:
                     data["members"].pop(qq, None)
+                    stats["opted_out"] += 1
                     continue
                 user = await session.get(SkUser, user_id)
                 if user is None:
@@ -127,34 +135,61 @@ class EchoStore:
                 char = await get_default_ef_character(session, user)
                 if char is None:
                     stats["dropped"] += data["members"].pop(qq, None) is not None
+                    build_members.pop(qq, None)
                     continue
-                # An API error code drops the member at once; other failures (network, login) get one
-                # retry. Members still failing are dropped so stale clears never stay on the boards.
-                for attempt in range(2):
-                    try:
-                        echoes = await _fetch(WAR_ECHOES_URL, user, char)
-                        records, targets = _extract(echoes["warEchoes"])
+                stats["eligible"] += 1
+                if not builds_only:
+                    old = data["members"].get(qq, {})
+                    sources = dict(old.get("sources") or {})
+                    fresh = 0
+                    layout = self.layout()
+                    for source, url, field in (("echoes", WAR_ECHOES_URL, "warEchoes"), ("monument", INDIE_HARD_URL, "indieHard")):
+                        for attempt in range(2):
+                            try:
+                                payload = (await _fetch(url, user, char))[field]
+                                if source == "echoes":
+                                    records, targets = _extract(payload)
+                                    data["targets"].update(targets)
+                                    layout["seasons"] = extract_layout(payload, {})["seasons"]
+                                else:
+                                    records = _extract_monument(payload)
+                                    layout["monument"] = extract_layout({}, payload)["monument"]
+                                stamp = time.time()
+                                for record in records.values():
+                                    record["collected_at"] = stamp
+                                sources[source] = {"ts": stamp, "records": records}
+                                stats[source] += 1
+                                fresh += 1
+                                break
+                            except Exception as e:
+                                if isinstance(e, RecordError) or attempt:
+                                    stats[type(e).__name__] += 1
+                                    stats[f"{source}_failed"] += 1
+                                    break
+                                await asyncio.sleep(REQUEST_GAP * 2)
                         await asyncio.sleep(REQUEST_GAP)
-                        monument = await _fetch(INDIE_HARD_URL, user, char)
-                        records.update(_extract_monument(monument["indieHard"]))
-                        if not stats["ok"]:  # the same for every member: one answer per run is enough
-                            self.save_layout(extract_layout(echoes["warEchoes"], monument["indieHard"]))
-                        data["members"][qq] = {"ts": time.time(), "records": records}
-                        data["targets"].update(targets)
+                    self.save_layout(layout)
+                    if fresh:
+                        # Legacy records have no source: keep them until both sources succeed.
+                        legacy = {} if len(sources) == 2 else old.get("legacy_records", old.get("records", {}) if not old.get("sources") else {})
+                        for record in legacy.values():
+                            record.setdefault("collected_at", old.get("ts", 0))
+                        records = dict(legacy)
+                        for snapshot in sources.values():
+                            records.update(snapshot["records"])
+                        data["members"][qq] = {"ts": time.time(), "sources": sources, "legacy_records": legacy, "records": records}
                         stats["ok"] += 1
-                        break
-                    except Exception as e:
-                        if isinstance(e, RecordError) or attempt:
-                            stats[type(e).__name__] += 1
-                            stats["dropped"] += data["members"].pop(qq, None) is not None
-                            break
-                        await asyncio.sleep(REQUEST_GAP * 2)
-                if builds is not None and qq in data["members"]:
+                    elif old:
+                        stats["retained"] += 1
+                if builds is not None:
                     try:  # a failure keeps the member's previous snapshot
                         await asyncio.sleep(REQUEST_GAP)
                         card = await _fetch(CARD_URL, user, char)
-                        build_members[qq] = {"ts": time.time(), "chars": extract(card.get("detail") or {})}
+                        chars = extract(card.get("detail") or {})
+                        build_members[qq] = {"ts": time.time(), "chars": chars}
                         stats["builds"] += 1
+                        stats["build_operators"] += len(chars)
+                        stats["builds_empty"] += not chars
                     except Exception as e:
                         stats[f"builds_{type(e).__name__}"] += 1
                 # Persist refreshed tokens now: a write left pending across the whole run would hold

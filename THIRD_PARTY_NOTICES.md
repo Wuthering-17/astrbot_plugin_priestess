@@ -3,6 +3,13 @@
 This repository contains material derived from, or distributed together with, the following
 third-party works. Each remains under its own license.
 
+## Group sign-in presentation reference
+
+- Reference: https://github.com/Azincc/astrbot_plugin_skland (`main.py`, `skd` group output).
+- Author: Azincc and contributors.
+- The group sign-in output follows its three-column presentation (Arknights / Endfield / nickname).
+- No source code from this project is included; status aggregation uses this adapter's own implementation.
+
 ## Priestess-bot
 
 - Source: https://github.com/Billtranscend/Priestess-bot
@@ -49,6 +56,11 @@ SOFTWARE.
 ## nonebot-plugin-skland
 
 - Source: https://github.com/FrostN0v0/nonebot-plugin-skland
+- The Arknights Heybox export format and pool-name mapping in
+  `priestess_features/ark_heybox.py` follow this project's `services/gacha.py`.
+- Static images bundled under `resources/images/ark_card/`, `endfield/`, `rogue/`
+  and `background/endfield/simple/` are from its resource tree; original artwork
+  remains attributed to its respective game rights holders.
 - Used in: `plugins/skland_ef_theme/templates/` (`endfield_card.html.jinja2`, `endfield_macros.html.jinja2`,
   `ef_gacha.html.jinja2`, `ef_gacha_macros.html.jinja2`). These files are restyled versions of the
   templates of the same names shipped with nonebot-plugin-skland 0.7.1; the data fields and template

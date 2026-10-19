@@ -10,6 +10,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 import qrcode
+from sqlalchemy import select
 import astrbot.api.message_components as Comp
 from astrbot.api.event import filter, AstrMessageEvent, MessageChain
 from astrbot.api.star import Context, Star
@@ -71,7 +72,10 @@ from .recruit_vision import recognize_tags_from_image
 from .priestess_features.wiki import EndfieldWiki
 from .priestess_features.guide import CN, EndfieldGuide
 from .priestess_features.gacha_rank import GachaRank
+from .priestess_features.ark_gacha_rank import ArkGachaRank
+from .priestess_features.pool_compare import PoolCompare
 from .priestess_features.heybox import HeyboxImporter
+from .priestess_features.ark_heybox import ArkHeyboxImporter
 from .priestess_features.sanity import SanityReminder
 from .priestess_features.weekly_report import WeeklyReport
 from .priestess_features.health import AccountHealth
@@ -195,7 +199,7 @@ def group_ef_gacha_records(records: list[GachaRecord]) -> EfGroupedGachaRecord:
                 pulls=[
                     EfGachaPull(
                         pool_name=p.pool_name,
-                        item_id=p.char_id,
+                        item_id=p.char_id or ef_gacha_pool_data.resolve_item_id(p.item_type, p.char_name, p.pool_id),
                         item_name=p.char_name,
                         item_type=p.item_type,
                         rarity=p.rarity,
@@ -335,10 +339,13 @@ class SklandPlugin(Star):
         self._alert_stop_event = asyncio.Event()
         self.sanity = SanityReminder(self, self.data_dir)
         self.gacha_rank = GachaRank(self.data_dir)
+        self.ark_gacha_rank = ArkGachaRank(self.data_dir)
+        self.pool_compare = PoolCompare(self)
         self._sanity_task = None
         self._sanity_stop_event = asyncio.Event()
         self._auto_sign_task = None
         self._auto_sign_stop_event = asyncio.Event()
+        self._group_sign_lock = asyncio.Lock()
         self.wiki = EndfieldWiki(self, self.data_dir)
         self._wiki_task = None
         self._wiki_stop_event = asyncio.Event()
@@ -347,6 +354,7 @@ class SklandPlugin(Star):
         self._guide_stop_event = asyncio.Event()
         self.calendar = AstrBotCalendar(self, self.wiki, self.data_dir)
         self.heybox = HeyboxImporter(self, self.data_dir)
+        self.ark_heybox = ArkHeyboxImporter(self)
         self.weekly_report = WeeklyReport(self, self.data_dir)
         self._weekly_task = None
         self._weekly_stop_event = asyncio.Event()
@@ -655,17 +663,70 @@ class SklandPlugin(Star):
     @filter.command("zmd欧非榜", alias={"ef欧非榜", "终末地欧非榜", "欧非榜"})
     async def cmd_gacha_rank(self, event: AstrMessageEvent):
         action = self._command_argument(event).strip()
-        yield event.plain_result(await self.gacha_rank.page(event, None, action))
-        event.stop_event()
+        async for result in self._send_gacha_rank(event, None, action):
+            yield result
 
     @filter.command("zmd角色欧非榜", alias={"ef角色欧非榜", "终末地角色欧非榜", "角色欧非榜"})
     async def cmd_character_gacha_rank(self, event: AstrMessageEvent):
-        yield event.plain_result(await self.gacha_rank.page(event, "角色"))
-        event.stop_event()
+        async for result in self._send_gacha_rank(event, "角色"):
+            yield result
 
     @filter.command("zmd武器欧非榜", alias={"ef武器欧非榜", "终末地武器欧非榜", "武器欧非榜"})
     async def cmd_weapon_gacha_rank(self, event: AstrMessageEvent):
-        yield event.plain_result(await self.gacha_rank.page(event, "武器"))
+        async for result in self._send_gacha_rank(event, "武器"):
+            yield result
+
+    @filter.command("方舟欧非榜", alias={"明日方舟欧非榜", "mrfz欧非榜"})
+    async def cmd_ark_gacha_rank(self, event: AstrMessageEvent):
+        argument = self._command_argument(event).strip()
+        action = argument if argument in ("退出", "加入") else ""
+        board = None if action else argument or None
+        async for result in self._send_gacha_rank(event, board, action, self.ark_gacha_rank):
+            yield result
+
+    @filter.command("卡池对比", alias={"群友卡池", "群卡池对比"})
+    async def cmd_pool_compare(self, event: AstrMessageEvent):
+        async for result in self._send_pool_compare(event):
+            yield result
+
+    @filter.command("方舟卡池对比", alias={"明日方舟卡池对比"})
+    async def cmd_ark_pool_compare(self, event: AstrMessageEvent):
+        async for result in self._send_pool_compare(event, "arknights"):
+            yield result
+
+    @filter.command("终末地卡池对比", alias={"zmd卡池对比", "ef卡池对比"})
+    async def cmd_ef_pool_compare(self, event: AstrMessageEvent):
+        async for result in self._send_pool_compare(event, "endfield"):
+            yield result
+
+    async def _send_pool_compare(self, event: AstrMessageEvent, game: str | None = None):
+        try:
+            message, comparison = await self.pool_compare.prepare(event, self._command_argument(event), game)
+            if comparison is None:
+                yield event.plain_result(message)
+            else:
+                yield event.plain_result(f"正在生成「{comparison.pool.name}」本群对比：{len(comparison.members)} 位群友，预计 {comparison.page_count} 张图片。")
+                paths = []
+                async for path in self.pool_compare.pictures(comparison):
+                    paths.append(path)
+                async for result in self._send_gacha_images(event, paths, f"卡池对比 · {comparison.pool.name}"):
+                    yield result
+        except Exception:
+            logger.exception("[Priestess] 群友卡池对比生成失败")
+            yield event.plain_result("卡池对比生成失败，请管理员查看日志后重试。")
+        event.stop_event()
+
+    async def _send_gacha_rank(self, event: AstrMessageEvent, board: str | None, action: str = "", service=None):
+        service = service or self.gacha_rank
+        try:
+            page = await service.page(event, board, action)
+            if page.kind == "html":
+                yield event.image_result(await service.render(self, page))
+            else:
+                yield event.plain_result(page.value)
+        except Exception:
+            logger.exception("[Priestess] 欧非榜生成失败")
+            yield event.plain_result("欧非榜图片生成失败，请管理员查看日志后重试。")
         event.stop_event()
 
     @filter.command("zmd导入小黑盒", alias={"终末地导入小黑盒", "ef导入小黑盒", "导入小黑盒"})
@@ -676,6 +737,13 @@ class SklandPlugin(Star):
     @filter.command("zmd撤销小黑盒导入", alias={"终末地撤销小黑盒导入", "ef撤销小黑盒导入", "撤销小黑盒导入"})
     async def cmd_heybox_undo(self, event: AstrMessageEvent):
         yield event.plain_result(await self.heybox.undo(event))
+        event.stop_event()
+
+    @filter.command("方舟导入小黑盒", alias={"明日方舟导入小黑盒", "方舟导入抽卡记录", "导入抽卡记录"})
+    async def cmd_ark_heybox_import(self, event: AstrMessageEvent):
+        argument = self._command_argument(event)
+        url = re.sub(r"\s+-r\s+\d+\s*$", "", argument).strip()
+        yield event.plain_result(await self.ark_heybox.import_history(event, url))
         event.stop_event()
 
     @filter.command("森空岛签到", alias={"skl签到", "skd签到"})
@@ -718,15 +786,22 @@ class SklandPlugin(Star):
         async for result in self._forward_command(event, self.cmd_recruit):
             yield result
 
-    @filter.regex(r"^/[^\s/]{1,30}$", priority=95, block=False)
+    @filter.regex(r"^/?[^\s/]{1,30}$", priority=-100, block=False)
     async def cmd_endfield_wiki_lookup(self, event: AstrMessageEvent):
         """Resolve Priestess wiki names after regular plugin commands."""
-        query = event.get_message_str().strip()[1:]
+        text = event.get_message_str().strip()
+        if not text.startswith("/") and not event.is_at_or_wake_command:
+            return
+        query = text.removeprefix("/")
+        if not self.wiki.index_file.exists():
+            yield event.plain_result("终末地资料库尚未就绪，正在同步，首次同步可能需要几分钟。")
         try:
+            await self.wiki.ensure_ready()
             kind, value = await self.wiki.render_result(query)
         except Exception as e:
             logger.exception("[Priestess] Endfield wiki card render failed")
-            yield event.plain_result("资料图生成失败，请稍后再试。")
+            message = "资料图生成失败，请稍后再试。" if self.wiki.index_file.exists() else "终末地资料同步失败，请检查机器人访问 AKEData 的网络，或由管理员执行 /资料库更新 后重试。"
+            yield event.plain_result(message)
             event.stop_event()
             return
         if kind == "miss":
@@ -786,11 +861,15 @@ class SklandPlugin(Star):
         event.stop_event()
 
     async def _send_guide_page(self, event: AstrMessageEvent, command: str, query: str = ""):
+        if not self.wiki.index_file.exists():
+            yield event.plain_result("终末地资料库尚未就绪，正在同步，首次同步可能需要几分钟。")
         try:
+            await self.wiki.ensure_ready()
             kind, value, followup = await self.guide.page(command, query, event)
         except Exception:
             logger.exception("[Priestess] Endfield guide failed")
-            yield event.plain_result("攻略资料图生成失败，请稍后再试。")
+            message = "攻略资料图生成失败，请稍后再试。" if self.wiki.index_file.exists() else "终末地资料同步失败，请检查机器人访问 AKEData 的网络，或由管理员执行 /资料库更新 后重试。"
+            yield event.plain_result(message)
             event.stop_event()
             return
         if kind == "image":
@@ -880,16 +959,63 @@ class SklandPlugin(Star):
             yield event.plain_result(str(error))
         event.stop_event()
 
-    @filter.command("攻略数据更新")
-    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("攻略数据更新", alias={"skl攻略数据更新"}, priority=10)
     async def cmd_guide_collect(self, event: AstrMessageEvent):
-        yield event.plain_result("开始收集绑定账号的战争回响、影拓丰碑记录和配装数据。")
+        async for result in self._collect_guide_data(event):
+            yield result
+
+    @filter.command("配装数据更新", alias={"群友配装更新", "skl配装数据更新"}, priority=10)
+    async def cmd_build_collect(self, event: AstrMessageEvent):
+        async for result in self._collect_guide_data(event, builds_only=True):
+            yield result
+
+    @filter.command("配队数据更新", alias={"群友配队更新", "skl配队数据更新"}, priority=10)
+    async def cmd_team_collect(self, event: AstrMessageEvent):
+        async for result in self._collect_guide_data(event, teams_only=True):
+            yield result
+
+    @filter.command("配队", alias={"群友配队"}, priority=10)
+    async def cmd_team_view(self, event: AstrMessageEvent):
         try:
-            result = await self.guide.collect()
-            yield event.plain_result(f"收集完成：{result}")
+            kind, content = await self.guide.team_page(self._command_argument(event), event)
+            yield event.image_result(content) if kind == "image" else event.plain_result(content)
+        except Exception:
+            logger.exception("[Priestess] Team page failed")
+            yield event.plain_result("配队查询失败，请检查 NapCat 群成员权限及日志后重试。")
+        event.stop_event()
+
+    async def _collect_guide_data(self, event: AstrMessageEvent, *, builds_only: bool = False, teams_only: bool = False):
+        if not event.is_admin():
+            yield event.plain_result("此命令需要 AstrBot 管理员权限。请在 AstrBot 的管理员 ID 列表中配置你的 QQ；QQ群管理员身份不会自动获得此权限。")
+            event.stop_event()
+            return
+        if self.guide.echo_store.lock.locked():
+            yield event.plain_result("当前正在采集攻略或配装数据，请等待本轮结束后再试。")
+            event.stop_event()
+            return
+        label = "配队" if teams_only else "配装" if builds_only else "高难战绩及配装"
+        logger.info("[Priestess] Manual %s collection command entered", label)
+        yield event.plain_result(f"开始采集绑定用户默认终末地角色的{label}数据，请稍候。")
+        try:
+            result = await self.guide.collect(builds_only=builds_only, **({"teams_only": True} if teams_only else {}))
+            if teams_only:
+                yield event.plain_result(
+                    f"配队采集完成：战争回响成功 {result.get('echoes', 0)} 个，失败 {result.get('echoes_failed', 0)} 个；"
+                    f"影拓丰碑成功 {result.get('monument', 0)} 个，失败 {result.get('monument_failed', 0)} 个。\n"
+                    "失败的接口保留上次记录。发送 /配队 角色名 查看本群通关阵容，1 人也可展示。"
+                )
+                event.stop_event()
+                return
+            errors = sum(value for key, value in result.items() if key.startswith("builds_") and key != "builds_empty")
+            yield event.plain_result(
+                f"采集完成：符合条件的账号 {result.get('eligible', 0)} 个；配装读取成功 {result.get('builds', 0)} 个，失败 {errors} 个；"
+                f"获得 {result.get('build_operators', 0)} 份 70 级以上干员配装样本。\n"
+                f"高难战绩成功 {result.get('ok', 0)} 个；其中 {result.get('builds_empty', 0)} 个账号没有符合条件的配装。\n"
+                "发送 /配队 角色名 查看群友通关配队。重新发送 /角色名 查看群友配装；同一干员至少需 3 位用户满足 70 级及三件套条件。"
+            )
         except Exception as error:
             logger.exception("[Priestess] Manual Endfield collection failed")
-            yield event.plain_result(f"收集失败：{type(error).__name__}")
+            yield event.plain_result(f"采集失败：{type(error).__name__}。已成功采集的数据会保留，请管理员查看日志。")
         event.stop_event()
 
     # ==================== 绑定相关 ====================
@@ -1180,9 +1306,9 @@ class SklandPlugin(Star):
 
     # ==================== 签到 ====================
 
-    async def _do_ark_sign(self, event: AstrMessageEvent) -> list[str] | None:
+    async def _do_ark_sign(self, event: AstrMessageEvent | None = None, *, sender_id: str | None = None) -> list[str] | None:
         """执行明日方舟签到；None 表示未绑定账号, [] 表示已绑定但无角色"""
-        sender_id = event.get_sender_id()
+        sender_id = sender_id if sender_id is not None else event.get_sender_id()
         async with await get_session() as session:
             user = await get_user_by_platform(session, sender_id)
             if not user:
@@ -1211,9 +1337,9 @@ class SklandPlugin(Star):
                 await session.commit()
             return results
 
-    async def _do_ef_sign(self, event: AstrMessageEvent) -> list[str] | None:
+    async def _do_ef_sign(self, event: AstrMessageEvent | None = None, *, sender_id: str | None = None) -> list[str] | None:
         """执行终末地签到；None 表示未绑定账号, [] 表示已绑定但无角色"""
-        sender_id = event.get_sender_id()
+        sender_id = sender_id if sender_id is not None else event.get_sender_id()
         async with await get_session() as session:
             user = await get_user_by_platform(session, sender_id)
             if not user:
@@ -1251,6 +1377,72 @@ class SklandPlugin(Star):
                         results.append(f"❌ {char.nickname} 签到失败: {error_msg}")
                 await session.commit()
             return results
+
+    @staticmethod
+    def _group_sign_icon(results: list[str] | None) -> str:
+        if not results:
+            return "—"
+        signed = [result.startswith(("✅", "ℹ️")) for result in results]
+        if all(signed):
+            return "✅"
+        return "⚠️" if any(signed) else "❌"
+
+    @filter.command("全群签到", alias={"群签到", "森空岛群签到"}, priority=10)
+    async def cmd_group_sign(self, event: AstrMessageEvent):
+        if not event.get_group_id() or event.get_platform_name() != "aiocqhttp":
+            yield event.plain_result("请在 NapCat / OneBot QQ 群内使用 /全群签到。")
+            event.stop_event()
+            return
+        if not event.is_admin():
+            yield event.plain_result("全群签到需要 AstrBot 管理员权限，请将操作者 QQ 加入 AstrBot 管理员 ID 列表。")
+            event.stop_event()
+            return
+        if self._group_sign_lock.locked():
+            yield event.plain_result("当前正在进行全群签到，请等待本轮汇总。")
+            event.stop_event()
+            return
+        async with self._group_sign_lock:
+            try:
+                members = await event.bot.call_action("get_group_member_list", group_id=int(event.get_group_id()))
+                names = {str(member["user_id"]): str(member.get("card") or member.get("nickname") or member["user_id"]) for member in members}
+                async with await get_session() as session:
+                    bound = set((await session.execute(select(SkUser.platform_user_id))).scalars().all())
+                users = sorted(set(names) & {str(qq) for qq in bound})
+                totals = {game: {"success": 0, "already": 0, "failed": 0, "errors": 0} for game in ("明日方舟", "终末地")}
+                failures = set()
+                rows = []
+                for qq in users:
+                    icons = []
+                    for game, sign in (("明日方舟", self._do_ark_sign), ("终末地", self._do_ef_sign)):
+                        try:
+                            results = await sign(sender_id=qq)
+                            icons.append(self._group_sign_icon(results))
+                            for result in results or []:
+                                status = "success" if result.startswith("✅") else "already" if result.startswith("ℹ️") else "failed"
+                                totals[game][status] += 1
+                                if status == "failed":
+                                    failures.add(qq)
+                        except Exception:
+                            # Do not echo API exceptions or credentials into a group summary.
+                            totals[game]["errors"] += 1
+                            failures.add(qq)
+                            icons.append("⚠️")
+                        await asyncio.sleep(1)
+                    nickname = re.sub(r"[\r\n\t\x00-\x1f\x7f]", " ", names[qq]).replace("|", "｜")[:30]
+                    rows.append(f"{icons[0]} | {icons[1]} | {nickname}")
+                lines = ["森空岛签到统计", "═══════════════", "方舟 | 终末 | 昵称", "-----------------"]
+                lines.extend(rows or ["本群暂无已绑定成员。"])
+                lines.extend(["═══════════════", "✅ 已签到  ❌ 失败  ⚠️ 部分失败/账号异常  — 无绑定角色", f"本群 {len(names)} 人，处理已绑定成员 {len(users)} 人。"])
+                for game, counts in totals.items():
+                    lines.append(f"{game}：成功 {counts['success']} 个角色，已签到 {counts['already']} 个角色，失败 {counts['failed']} 个角色，账号异常 {counts['errors']} 个。")
+                if failures:
+                    labels = [names[qq].replace("\n", " ")[:30] for qq in sorted(failures)[:10]]
+                    lines.append("需检查绑定的成员：" + "、".join(labels) + (f"等 {len(failures)} 人" if len(failures) > 10 else "") + "。请本人使用 /森空岛签到 查看详情。")
+                lines.append("未绑定成员及未绑定的游戏角色自动跳过。")
+                yield event.plain_result("\n".join(lines))
+            except Exception:
+                yield event.plain_result("全群签到未能完成，请检查 NapCat 群成员读取权限及插件数据库后重试。")
+        event.stop_event()
 
     @sk.command("arksign")
     async def cmd_arksign(self, event: AstrMessageEvent):
@@ -1924,9 +2116,10 @@ class SklandPlugin(Star):
                 event.stop_event()
                 return
 
+            image_paths = []
             pools_slice = gacha_data_grouped.pools
             if len(pools_slice) > gacha_render_max:
-                yield event.plain_result(self._sk("抽卡记录过多，将分多张图片发送..."))
+                yield event.plain_result(self._sk("正在生成多页抽卡记录，将以合并转发发送。"))
                 for i in range(0, len(pools_slice), gacha_render_max):
                     try:
                         image_path = await render_gacha_history(
@@ -1937,19 +2130,36 @@ class SklandPlugin(Star):
                             i,
                             i + gacha_render_max,
                         )
-                        yield event.image_result(image_path)
+                        image_paths.append(image_path)
                     except Exception as e:
                         logger.exception(f"[Skland] 渲染抽卡记录第 {i // gacha_render_max + 1} 页失败: {e}")
                         yield event.plain_result(self._sk(f"渲染第 {i // gacha_render_max + 1} 页失败: {e}"))
             else:
                 try:
                     image_path = await render_gacha_history(self, gacha_data_grouped, char, user_info.status)
-                    yield event.image_result(image_path)
+                    image_paths.append(image_path)
                 except Exception as e:
                     logger.exception(f"[Skland] 渲染抽卡记录失败: {e}")
                     yield event.plain_result(self._sk(f"抽卡记录渲染失败: {e}"))
 
+            async for result in self._send_gacha_images(event, image_paths, "明日方舟抽卡记录"):
+                yield result
             event.stop_event()
+
+    async def _send_gacha_images(self, event: AstrMessageEvent, paths: list[str], title: str):
+        if len(paths) > 1 and event.get_platform_name() == "aiocqhttp":
+            for start in range(0, len(paths), 20):
+                nodes = [
+                    Comp.Node(
+                        uin=event.get_self_id(), name="Priestess Bot",
+                        content=[Comp.Plain(f"{title} · 第 {index + 1}/{len(paths)} 页"), Comp.Image.fromFileSystem(path)],
+                    )
+                    for index, path in enumerate(paths[start:start + 20], start)
+                ]
+                yield event.chain_result([Comp.Nodes(nodes)])
+        else:
+            for path in paths:
+                yield event.image_result(path)
 
     @sk.command("efgacha")
     async def cmd_efgacha(self, event: AstrMessageEvent):
@@ -2039,16 +2249,10 @@ class SklandPlugin(Star):
                 event.stop_event()
                 return
 
-            # 构建 PlayerBase 用于渲染
-            from .schemas import PlayerBase
-            player = PlayerBase(
-                name=player_info.base.name,
-                avatarUrl=player_info.base.avatarUrl,
-                level=player_info.base.level,
-                uid=player_info.base.uid,
-            )
+            player = player_info.base
 
             # 分组并渲染
+            await ef_gacha_pool_data.ensure_pools({record.pool_id for record in all_records})
             gacha_data_grouped = group_ef_gacha_records(all_records)
 
             if not gacha_data_grouped.all_pools:
@@ -2056,10 +2260,11 @@ class SklandPlugin(Star):
                 event.stop_event()
                 return
 
-            pools_slice = gacha_data_grouped.all_pools
-            if len(pools_slice) > ef_gacha_render_max:
-                yield event.plain_result(self._sk("抽卡记录过多，将分多张图片发送..."))
-                for i in range(0, len(pools_slice), ef_gacha_render_max):
+            image_paths = []
+            page_pool_count = gacha_data_grouped.max_category_pool_count
+            if page_pool_count > ef_gacha_render_max:
+                yield event.plain_result(self._sk("正在生成多页抽卡记录，将以合并转发发送。"))
+                for i in range(0, page_pool_count, ef_gacha_render_max):
                     try:
                         image_path = await render_ef_gacha_history(
                             self,
@@ -2069,18 +2274,20 @@ class SklandPlugin(Star):
                             i,
                             i + ef_gacha_render_max,
                         )
-                        yield event.image_result(image_path)
+                        image_paths.append(image_path)
                     except Exception as e:
                         logger.exception(f"[Skland] 渲染终末地抽卡第 {i // ef_gacha_render_max + 1} 页失败: {e}")
                         yield event.plain_result(self._sk(f"渲染第 {i // ef_gacha_render_max + 1} 页失败: {e}"))
             else:
                 try:
                     image_path = await render_ef_gacha_history(self, gacha_data_grouped, player, char)
-                    yield event.image_result(image_path)
+                    image_paths.append(image_path)
                 except Exception as e:
                     logger.exception(f"[Skland] 渲染终末地抽卡记录失败: {e}")
                     yield event.plain_result(self._sk(f"终末地抽卡记录渲染失败: {e}"))
 
+            async for result in self._send_gacha_images(event, image_paths, "终末地抽卡记录"):
+                yield result
             event.stop_event()
 
     # ==================== 公招推荐 ====================

@@ -1,6 +1,8 @@
 """游戏数据加载与管理"""
 
 import json
+import asyncio
+import time
 from typing import TYPE_CHECKING
 
 import httpx
@@ -133,6 +135,33 @@ class EfGachaPoolTableData:
     def __init__(self) -> None:
         self._file_path = DATA_DIR / "endfield" / "GachaPoolTable.json"
         self.pool_table: dict[str, EfGachaContentPool] = {}
+        self._refresh_lock = asyncio.Lock()
+        self._last_refresh = float("-inf")
+
+    def resolve_item_id(self, item_type: str, name: str, pool_id: str = "") -> str:
+        """Resolve name-only imports from the same pool before searching other pools."""
+        preferred = self.get_pool(pool_id)
+        pools = [preferred] if preferred else []
+        pools.extend(self.pool_table.values())
+        prefix = "wpn_" if item_type == "weapon" else "chr_"
+        for pool in pools:
+            matches = {item.id for item in pool.all if item.name == name and item.id.startswith(prefix)}
+            if len(matches) == 1:
+                return matches.pop()
+        return ""
+
+    async def ensure_pools(self, pool_ids: set[str]) -> None:
+        """Retry unavailable metadata on demand, at most once per minute."""
+        if pool_ids <= self.pool_table.keys():
+            return
+        async with self._refresh_lock:
+            if pool_ids <= self.pool_table.keys() or time.monotonic() - self._last_refresh < 60:
+                return
+            self._last_refresh = time.monotonic()
+            try:
+                await self.load()
+            except RequestException as error:
+                logger.warning("终末地卡池资料暂不可用: %s", error)
 
     async def download(self) -> None:
         """从 GitHub 下载 GachaPoolTable.json（支持代理）"""

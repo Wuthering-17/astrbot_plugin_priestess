@@ -1,0 +1,9 @@
+# Exclude standalone NoneBot deployment files from AstrBot's GitHub download.
+.github export-ignore
+deploy export-ignore
+docs export-ignore
+.env.example export-ignore
+.gitignore export-ignore
+bot.py export-ignore
+compose.example.yaml export-ignore
+requirements-nonebot.txt export-ignore

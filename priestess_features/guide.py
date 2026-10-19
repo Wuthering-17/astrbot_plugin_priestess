@@ -124,14 +124,14 @@ class EndfieldGuide:
         html = self.wiki._inline_local_images(html)
         return await _try_star_html_render(self.plugin, html, width=width, base_url=self.wiki.data_dir.as_uri())
 
-    async def collect(self):
-        return await self.echo_store.collect(self.build_store)
+    async def collect(self, *, builds_only: bool = False, teams_only: bool = False):
+        return await self.echo_store.collect(None if teams_only else self.build_store, builds_only=builds_only)
 
     def set_optout(self, user_id: str, opted_out: bool) -> str:
         self.echo_store.set_optout(user_id, opted_out)
         return "已退出统计，你的记录不会再被收集或出现在榜单中" if opted_out else "已重新加入通关阵容统计，下次更新后生效"
 
-    async def _member_data(self, event):
+    async def _member_data(self, event, *, strict: bool = False):
         requester = str(event.get_sender_id()) if event is not None else ""
         pool = {requester} if requester else set()
         names = {requester: requester} if requester else {}
@@ -142,6 +142,8 @@ class EndfieldGuide:
                 pool = {str(member["user_id"]) for member in members}
                 names = {str(member["user_id"]): str(member.get("card") or member.get("nickname") or member["user_id"]) for member in members}
             except Exception:
+                if strict:
+                    raise RuntimeError("读取本群成员失败，请检查 NapCat 连接后重试。")
                 logger.warning("[Priestess] Could not read QQ group members for guide statistics", exc_info=True)
         clear_data = self.echo_store.load()
         for qq in self.echo_store.optout():
@@ -155,6 +157,49 @@ class EndfieldGuide:
                 for character in record.get("team", []):
                     character["id"] = by_hash.get(character.get("id", ""), character.get("id", ""))
         return pool, names, clear_data, operators, group_id
+
+    async def team_page(self, query: str, event) -> tuple[str, str]:
+        if not query.strip():
+            return "text", "用法：/配队 庄方宜。管理员先执行 /配队数据更新，采集本群已绑定成员的高难通关阵容。"
+        loaded = self.wiki.resolver()
+        if not loaded:
+            return "text", "资料库尚未就绪，请管理员先执行 /资料库更新。"
+        result = loaded[1].resolve(query.strip())
+        if result is None or result.kind != "operator":
+            return "text", "未找到唯一的终末地干员，请使用完整角色名。"
+        pool, names, data, operators, group_id = await self._member_data(event, strict=True)
+        aliases = {"chr_0003_endminf": "chr_0002_endminm", "chr_9000_endmin": "chr_0002_endminm"}
+        wanted = aliases.get(result.id, result.id)
+        teams = {}
+        for qq, member in data.get("members", {}).items():
+            if qq not in pool:
+                continue
+            for stage, record in member.get("records", {}).items():
+                ids = tuple(sorted({aliases.get(c.get("id"), c.get("id")) for c in record.get("team", []) if c.get("id")}))
+                if wanted not in ids:
+                    continue
+                row = teams.setdefault(ids, {"members": set(), "stages": set(), "ts": []})
+                row["members"].add(qq)
+                row["stages"].add(stage.replace("|", " · "))
+                row["ts"].append(record.get("collected_at", member.get("ts", 0)))
+        if not teams:
+            return "text", "没有该干员的配队记录。请管理员执行 /配队数据更新，并确认群友默认角色有森空岛可见的战争回响或影拓丰碑通关记录。"
+        ranked = sorted(teams.items(), key=lambda item: (-len(item[1]["members"]), item[0]))
+        icons = {}
+        for cid in {cid for ids, _ in ranked[:20] for cid in ids}:
+            icons[cid] = await self.wiki._cached_image(wiki_data.char_icon_url(cid), f"chr_{cid}.png")
+        blocks = []
+        for ids, row in ranked[:20]:
+            chars = "".join(f'<div class="char"><img src="{escape(icons[cid], quote=True)}"><div>{escape(operators.get(cid, {}).get("name", cid))}</div></div>' for cid in ids)
+            stamp = min(row["ts"])
+            updated = datetime.fromtimestamp(stamp, CN).strftime("%m-%d %H:%M") if stamp else "未知（旧版记录）"
+            members = "、".join(names.get(qq, qq) for qq in sorted(row["members"]))
+            blocks.append(f'<section><div class="team">{chars}</div><p>{len(row["members"])} 人：{escape(members)}</p><p>{escape(" / ".join(sorted(row["stages"])))}</p><small>采集时间（最早）：{updated}</small></section>')
+        title = f'{"本群" if group_id else "你"}的配队 · {operators.get(result.id, {}).get("name", query)}'
+        html = '<html><meta charset="utf-8"><style>body{margin:0;padding:30px;background:#17191e;color:#eee;font-family:Arial,"Microsoft YaHei"}h1{color:#ffe052}section{background:#292d34;padding:18px;margin:16px 0;border-left:5px solid #ffe052}.team{display:flex;gap:20px}.char{text-align:center;width:130px}.char img{width:100px;height:100px;object-fit:contain}p{overflow-wrap:anywhere}small{color:#bbb}</style><body>'
+        html += f'<h1>{escape(title)}</h1><p>共 {len(ranked)} 种阵容，按使用人数展示前 20 种；每种阵容每人计一次。</p>'
+        html += "".join(blocks) + '<p>来源：森空岛高难最佳通关记录。样本少也展示，仅供参考；接口失败保留旧记录，请结合采集时间判断。</p></body></html>'
+        return "image", await self._render(html, width=850)
 
     @staticmethod
     def _top_difficulty(group: dict) -> str:

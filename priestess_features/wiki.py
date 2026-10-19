@@ -27,7 +27,7 @@ class EndfieldWiki:
 
     def __init__(self, plugin, data_dir: Path) -> None:
         self.plugin = plugin
-        self.data_dir = data_dir / "endfield_wiki"
+        self.data_dir = (data_dir / "endfield_wiki").resolve()
         self.index_file = self.data_dir / "index.json"
         self.state_file = self.data_dir / "state.json"
         self.image_dir = self.data_dir / "img"
@@ -70,6 +70,10 @@ class EndfieldWiki:
         except Exception:
             logger.debug("[Priestess] Could not record an unresolved wiki query", exc_info=True)
 
+    async def ensure_ready(self) -> None:
+        if not self.index_file.exists():
+            await self.sync()
+
     async def sync(self, force: bool = False) -> str:
         async with self._sync_lock:
             self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -85,13 +89,12 @@ class EndfieldWiki:
                 if latest["id"] == previous and self.index_file.exists() and not force and not outdated:
                     return f"已是最新版本 {previous}"
 
-                table_dir = self.data_dir / "tables_tmp"
-                data.remove_tree(table_dir)
-                try:
-                    await data.download_tables(client, latest["tableCfgPath"], table_dir)
-                    counts = await asyncio.to_thread(data.build_index, table_dir, latest, self.index_file)
-                finally:
-                    data.remove_tree(table_dir)
+                table_key = hashlib.sha256(latest["tableCfgPath"].encode()).hexdigest()[:16]
+                table_dir = self.data_dir / "tables_cache" / table_key
+                complete = table_dir / ".complete"
+                await data.download_tables(client, latest["tableCfgPath"], table_dir, refresh=force and complete.exists())
+                counts = await asyncio.to_thread(data.build_index, table_dir, latest, self.index_file)
+                complete.touch()
 
             self._write_json(self.state_file, {"version": latest["id"], "synced_at": time.time()})
             self._resolver_key = None
@@ -225,6 +228,8 @@ class EndfieldWiki:
             if guide:
                 endmin_ids = {"chr_0003_endminf": "chr_0002_endminm", "chr_9000_endmin": "chr_0002_endminm"}
                 clear_data = guide.echo_store.load()
+                for qq in optout:
+                    clear_data.get("members", {}).pop(qq, None)
                 known_ids = list(index["operators"]) + list(endmin_ids) + list(endmin_ids.values())
                 by_hash = {hashlib.md5(char_id.encode()).hexdigest(): char_id for char_id in known_ids}
                 for member in clear_data.get("members", {}).values():

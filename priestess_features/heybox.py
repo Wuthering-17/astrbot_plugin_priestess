@@ -151,6 +151,7 @@ class HeyboxImporter:
                 if name and not item_id.startswith("chr_9000"):
                     id_by_name.setdefault((item_type, name), item_id)
         rows = []
+        await ef_gacha_pool_data.ensure_pools({row["pool_id"] for row in plan.rows})
         for row in plan.rows:
             content = ef_gacha_pool_data.get_pool(row["pool_id"])
             rows.append({
@@ -161,7 +162,9 @@ class HeyboxImporter:
                 "item_type": row["item_type"],
                 "pool_id": row["pool_id"],
                 "pool_name": pool_names.get(row["pool_id"]) or (content.pool_name if content else "") or row["pool_name"],
-                "char_id": id_by_name.get((row["item_type"], row["name"]), ""),
+                "char_id": id_by_name.get((row["item_type"], row["name"]), "") or ef_gacha_pool_data.resolve_item_id(
+                    row["item_type"], row["name"], row["pool_id"]
+                ),
                 "char_name": row["name"],
                 "rarity": row["rarity"],
                 "is_new": False,

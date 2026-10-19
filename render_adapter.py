@@ -7,6 +7,13 @@ AstrBot 也可能提供 html_render（基于 Playwright）。
 """
 
 import base64
+import asyncio
+import hashlib
+import html
+import logging
+import time
+from io import BytesIO
+from urllib.parse import unquote, urlsplit
 import jinja2
 import mimetypes
 import re
@@ -110,7 +117,10 @@ def _inline_resources(html_content: str, base_dir: Path) -> str:
         elif path.startswith("./"):
             full = (base_dir / path[2:]).resolve()
         elif path.startswith("file://"):
-            full = Path(path[7:])
+            raw = unquote(urlsplit(path).path)
+            if re.match(r"^/[A-Za-z]:/", raw):
+                raw = raw[1:]
+            full = Path(raw)
         else:
             full = (base_dir / path).resolve()
         return full if full.exists() else None
@@ -137,8 +147,45 @@ def _inline_resources(html_content: str, base_dir: Path) -> str:
 
     html_content = re.sub(r'url\("([^"]+)"\)', _replace_url, html_content)
     html_content = re.sub(r"url\('([^']+)'\)", _replace_url, html_content)
+    html_content = re.sub(r'url\(([^\s\x22\x27][^)]*)\)', lambda match: f'url("{_to_data_url(match.group(1).strip())}")', html_content)
 
     return html_content
+
+
+async def _inline_remote_images(html_content: str) -> str:
+    """Fetch images locally so the remote HTML renderer needs no image-host access."""
+    import httpx
+
+    sources = set(re.findall(r'src="(https?://[^\"]+)"', html_content))
+    semaphore = asyncio.Semaphore(6)
+    image_cache = CACHE_DIR / "remote_images"
+    image_cache.mkdir(parents=True, exist_ok=True)
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=15) as client:
+        async def fetch(source: str) -> tuple[str, str]:
+            url = html.unescape(source)
+            path = image_cache / hashlib.sha256(url.encode()).hexdigest()
+            async with semaphore:
+                try:
+                    if path.exists() and time.time() - path.stat().st_mtime < 7 * 86400:
+                        data = path.read_bytes()
+                    else:
+                        response = await client.get(url)
+                        response.raise_for_status()
+                        data = response.content
+                    with Image.open(BytesIO(data)) as image:
+                        mime = Image.MIME.get(image.format)
+                        image.verify()
+                    if not mime:
+                        raise ValueError("unknown image format")
+                    path.write_bytes(data)
+                    return source, f"data:{mime};base64,{base64.b64encode(data).decode()}"
+                except (httpx.HTTPError, OSError, ValueError) as error:
+                    logging.getLogger("astrbot").warning("[Priestess] 抽卡图片资源加载失败 %s: %s", url, type(error).__name__)
+                    return source, source
+
+        replacements = dict(await asyncio.gather(*(fetch(source) for source in sources)))
+    return re.sub(r'src="(https?://[^\"]+)"', lambda match: f'src="{replacements[match.group(1)]}"', html_content)
 
 
 def _crop_image(image_path: str, html_content: str, width: int, device_scale_factor: float) -> str:
@@ -220,13 +267,13 @@ async def _html_to_pic(
 
     output_path = CACHE_DIR
     output_path.mkdir(parents=True, exist_ok=True)
-    file_name = output_path / f"skland_card_{datetime.now().strftime('%Y%m%d%H%M%S')}.png"
+    file_name = output_path / f"skland_card_{datetime.now().strftime('%Y%m%d%H%M%S%f')}.png"
 
     async with async_playwright() as p:
         browser = await launch_browser(p)
         # 将 base_url 传给 new_page，使模板中的相对路径资源（CSS、图片）能正确解析
         page = await browser.new_page(
-            viewport={"width": width, "height": max(height, 1200)},
+            viewport={"width": width, "height": max(height, 1)},
             device_scale_factor=device_scale_factor,
             base_url=base_url or f"file://{TEMPLATES_DIR}",
         )
@@ -276,6 +323,9 @@ async def _try_star_html_render(
 
     logger = logging.getLogger("astrbot")
 
+    html_content = _inline_resources(html_content, TEMPLATES_DIR)
+    html_content = await _inline_remote_images(html_content)
+
     # 检查 star 是否有 html_render 方法
     if hasattr(star, "html_render"):
         try:
@@ -311,7 +361,7 @@ async def _try_star_html_render(
                     output_path.mkdir(parents=True, exist_ok=True)
                     file_name = (
                         output_path
-                        / f"skland_card_{datetime.now().strftime('%Y%m%d%H%M%S')}.png"
+                        / f"skland_card_{datetime.now().strftime('%Y%m%d%H%M%S%f')}.png"
                     )
                     file_name.write_bytes(resp.content)
                     local_path = str(file_name)
@@ -631,6 +681,8 @@ async def render_ef_gacha_history(
     rendered_html = await template.render_async(
         avatar_url=player.avatarUrl,
         record=record,
+        special_up_known=all(pool.up_six_chars for pool in record.special_pools),
+        weapon_up_known=all(pool.up_six_chars for pool in record.weapon_pools),
         character=char,
         start_index=begin,
         end_index=limit,

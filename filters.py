@@ -62,7 +62,7 @@ def charId_to_avatarUrl(charId: str) -> str:
         img_url = f"https://web.hycdn.cn/arknights/game/assets/char/avatar/{charId}.png"
         logger.debug(f"Avatar not found locally, using URL: {img_url}")
         return img_url
-    return img_path.as_uri()
+    return img_path.resolve().as_uri()
 
 
 def charId_to_portraitUrl(charId: str) -> str:
@@ -76,7 +76,7 @@ def charId_to_portraitUrl(charId: str) -> str:
         img_url = f"https://web.hycdn.cn/arknights/game/assets/char/portrait/{encoded_id}.png"
         logger.debug(f"Portrait not found locally, using URL: {img_url}")
         return img_url
-    return img_path.as_uri()
+    return img_path.resolve().as_uri()
 
 
 def loads_json(json_str: str) -> dict:
@@ -227,7 +227,7 @@ def charId_to_avatarUrl(charId: str) -> str:
         img_url = f"https://web.hycdn.cn/arknights/game/assets/char/avatar/{charId}.png"
         logger.debug(f"Avatar not found locally, using URL: {img_url}")
         return img_url
-    return img_path.as_uri()
+    return img_path.resolve().as_uri()
 
 
 def charId_to_portraitUrl(charId: str) -> str:
@@ -242,7 +242,7 @@ def charId_to_portraitUrl(charId: str) -> str:
         img_url = f"https://web.hycdn.cn/arknights/game/assets/char/portrait/{encoded_id}.png"
         logger.debug(f"Portrait not found locally, using URL: {img_url}")
         return img_url
-    return img_path.as_uri()
+    return img_path.resolve().as_uri()
 
 
 def ef_charId_to_avatarUrl(item_id: str) -> str:
