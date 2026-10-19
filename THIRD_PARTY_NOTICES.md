@@ -3,6 +3,37 @@
 This repository contains material derived from, or distributed together with, the following
 third-party works. Each remains under its own license.
 
+## astrbot_plugin_sklands
+
+- Source: https://github.com/SciNancy/astrbot_plugin_sklands
+- Used in: the AstrBot Skland account and game-data implementation (`main.py`,
+  `api/`, `schemas/`, `resources/`, and related modules).
+- License: MIT
+
+```
+MIT License
+
+Copyright (c) 2025 SciNancy
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ## nonebot-plugin-skland
 
 - Source: https://github.com/FrostN0v0/nonebot-plugin-skland

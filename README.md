@@ -1,5 +1,30 @@
 # Priestess Bot
 
+## AstrBot plugin port
+
+This repository is being adapted as a native AstrBot plugin for AstrBot 4.28.2+
+with NapCat / OneBot v11. The local port currently includes Skland binding and
+queries, role selection, scheduled sign-in and Endfield gacha sync, sanity
+reminders, Endfield wiki and guide cards, event calendar notices, and automatic
+acceptance of group invitations, group gacha boards, and Heybox history import
+and undo, plus scheduled weekly reports and an account health audit. The migration
+is still incomplete: one QQ user can only bind one Skland account, and the
+weekly health job reports invalid bindings without removing them automatically.
+
+Install this repository from the AstrBot plugin page, or place it under
+`AstrBot/data/plugins/astrbot_plugin_priestess`. The plugin stores its database,
+tokens, and runtime cache under `data/plugin_data/astrbot-plugin-priestess/`.
+
+The migrated Skland implementation is derived from
+[SciNancy/astrbot_plugin_sklands](https://github.com/SciNancy/astrbot_plugin_sklands)
+under its MIT license. Original Priestess-bot code and its license notices are
+preserved. AstrBot exposes both `/sk` commands and the Priestess command aliases
+listed in the plugin help. Do not replace the existing live bot with this branch
+until the remaining features have been ported and checked on the target NapCat.
+
+The original standalone NoneBot deployment remains documented below and uses
+`requirements-nonebot.txt`.
+
 面向《明日方舟：终末地》与《明日方舟》玩家群的 QQ 群机器人，基于 NoneBot2 与 NapCat。
 A QQ group bot for Arknights: Endfield / Arknights communities, built on NoneBot2 and NapCat.
 

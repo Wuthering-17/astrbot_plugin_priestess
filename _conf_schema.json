@@ -1,0 +1,12 @@
+{
+    "skland_github_proxy_url": {
+        "description": "GitHub 代理 URL，用于下载游戏资源",
+        "type": "string",
+        "default": ""
+    },
+    "skland_github_token": {
+        "description": "GitHub Token，用于下载游戏资源",
+        "type": "string",
+        "default": ""
+    }
+}

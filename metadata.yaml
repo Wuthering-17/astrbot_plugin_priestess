@@ -1,0 +1,9 @@
+name: astrbot_plugin_priestess
+display_name: Priestess Bot
+desc: "明日方舟与终末地群机器人功能的 AstrBot 移植版"
+version: v0.1.0
+author: Billtranscend
+repo: https://github.com/Billtranscend/Priestess-bot
+support_platforms:
+  - aiocqhttp
+astrbot_version: ">=4.28.2,<5"
