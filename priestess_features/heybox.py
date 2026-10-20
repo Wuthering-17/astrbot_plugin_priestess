@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from astrbot.api import logger
 import asyncio
 import json
-import logging
 import time
 from datetime import datetime
 from pathlib import Path
@@ -24,7 +24,6 @@ USER_AGENT = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit
 FETCH_TIMEOUT = 15000
 FETCH_ATTEMPTS = 3
 COOLDOWN = 300
-logger = logging.getLogger("astrbot")
 
 
 class HeyboxFetchError(RuntimeError):

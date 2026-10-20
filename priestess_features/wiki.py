@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+from astrbot.api import logger
 import asyncio
 import base64
 import hashlib
 import json
-import logging
 import re
 import time
 from pathlib import Path
@@ -17,7 +17,6 @@ from .endfield_wiki.lookup import Resolver
 from .endfield_guide.echoes import partners as team_partners
 from ..render_adapter import _try_star_html_render
 
-logger = logging.getLogger("astrbot")
 
 
 class EndfieldWiki:

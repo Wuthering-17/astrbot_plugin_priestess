@@ -9,7 +9,7 @@ import math
 
 from ..data_source import ef_gacha_pool_data, gacha_table_data
 from ..db import get_default_ark_character, get_default_ef_character, get_gacha_records, get_session, get_user_by_platform
-from ..plugins import ef_theme
+from . import ef_theme
 from ..render_adapter import _try_star_html_render
 
 WIDTH = 1100

@@ -4,12 +4,12 @@ AstrBot 只提供简单 KV 存储，无法满足关系型查询需求。
 这里自携 SQLAlchemy + aiosqlite，完全独立于框架。
 """
 
-import logging
+from astrbot.api import logger
 from pathlib import Path
+from .config import DATA_DIR
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 
-logger = logging.getLogger(__name__)
 from sqlalchemy.orm import declarative_base, Mapped, mapped_column
 from sqlalchemy import String, Text, Boolean, BigInteger, select, text
 
@@ -92,14 +92,14 @@ _engine = None
 _session_maker = None
 
 # 默认数据库路径（AstrBot 插件规范目录）
-_DEFAULT_DB_PATH = str(Path("data/plugin_data/astrbot-plugin-priestess") / "skland.db")
+_DEFAULT_DB_PATH = str(DATA_DIR / "skland.db")
 
 
 async def init_db(db_path: str = None, force: bool = False):
     """初始化数据库连接并创建表（幂等，但检测文件是否被删除）
 
     Args:
-        db_path: 数据库文件路径，默认为 data/plugin_data/astrbot-plugin-priestess/skland.db
+        db_path: 数据库文件路径，默认为 data/plugin_data/astrbot_plugin_priestess/skland.db
         force: 强制重新初始化（用于数据库文件被删除后重建）
     """
     global _engine, _session_maker

@@ -1,10 +1,10 @@
 """最小化配置模块，兼容原插件 filters.py 的路径依赖"""
 
 from pathlib import Path
+from .storage import get_data_dir
 
 # 插件数据目录（AstrBot 规范：data/plugin_data/{plugin_name}/）
-DATA_DIR = Path("data/plugin_data/astrbot-plugin-priestess")
-DATA_DIR.mkdir(parents=True, exist_ok=True)
+DATA_DIR = get_data_dir()
 
 # 缓存目录（下载的游戏资源、临时文件）
 CACHE_DIR = DATA_DIR / "cache"

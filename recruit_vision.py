@@ -4,12 +4,11 @@
 无需本地 OCR 依赖，准确度由模型决定。
 """
 
+from astrbot.api import logger
 import json
-import logging
 import re
 from dataclasses import dataclass
 
-logger = logging.getLogger("astrbot")
 
 # 公招标签完整列表（用于提示模型，提高识别准确度）
 _ALL_RECRUIT_TAGS = [

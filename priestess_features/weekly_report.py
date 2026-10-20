@@ -30,7 +30,7 @@ from PIL import Image
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 
-from ..plugins import ef_theme
+from . import ef_theme
 from .endfield_guide.echoes import speed_ranking
 from .guide import CN
 

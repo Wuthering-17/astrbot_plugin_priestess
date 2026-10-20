@@ -1,3 +1,4 @@
+from astrbot.api import logger
 import hmac
 import json
 import hashlib
@@ -6,14 +7,12 @@ from typing import Literal
 from datetime import datetime
 from urllib.parse import urlparse
 
-import logging
 
 import httpx
 from pydantic import TypeAdapter
 
 from ..db import Character
 
-logger = logging.getLogger(__name__)
 
 from ..exception import LoginException, RequestException, UnauthorizedException
 from ..schemas import (

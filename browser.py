@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import logging
+from astrbot.api import logger
 import sys
 
 from playwright.async_api import Browser, Error, Playwright
 
-logger = logging.getLogger("astrbot")
 
 
 class BrowserUnavailableError(RuntimeError):

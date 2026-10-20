@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from html import escape
 
-from ...plugins import ef_theme
+from .. import ef_theme
 
 
 CAPTIONS = {"正在开放": "OPEN NOW", "即将开启": "UPCOMING", "卡池": "HEADHUNTING", "同时进行中": "IN PROGRESS"}  # English captions of the section cards

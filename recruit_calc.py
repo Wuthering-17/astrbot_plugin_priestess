@@ -4,7 +4,7 @@
 算法参考 ak-recruiter 和 MAA 的实现逻辑。
 """
 
-import logging
+from astrbot.api import logger
 from itertools import combinations
 from dataclasses import dataclass
 
@@ -21,7 +21,6 @@ from .recruit_data import (
     RECRUIT_TAG_COUNT,
 )
 
-logger = logging.getLogger("astrbot")
 
 
 @dataclass

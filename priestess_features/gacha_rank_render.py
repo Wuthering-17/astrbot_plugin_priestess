@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from html import escape
-from ..plugins import ef_theme
+from . import ef_theme
 TOP = 10
 MIN_UP = 2
 WIDTH = 1000

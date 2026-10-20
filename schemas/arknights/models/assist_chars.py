@@ -1,9 +1,8 @@
+from astrbot.api import logger
 from urllib.parse import quote
 
-import logging
 from pydantic import BaseModel
 
-logger = logging.getLogger(__name__)
 
 from .base import Equip
 from ....config import RES_DIR, CACHE_DIR

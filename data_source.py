@@ -1,14 +1,13 @@
 """游戏数据加载与管理"""
 
+from astrbot.api import logger
 import json
 import asyncio
 import time
 from typing import TYPE_CHECKING
 
 import httpx
-import logging
 
-logger = logging.getLogger(__name__)
 
 from .exception import RequestException
 from .config import DATA_DIR, DATA_ROUTES, GACHA_DATA_PATH, config

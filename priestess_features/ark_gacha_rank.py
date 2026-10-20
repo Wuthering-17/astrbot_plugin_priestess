@@ -4,7 +4,7 @@ from html import escape
 
 from ..db import get_default_ark_character, get_gacha_records, get_session, get_user_by_platform
 from ..data_source import gacha_table_data
-from ..plugins import ef_theme
+from . import ef_theme
 from .gacha_rank import GachaRank, RankPage
 from . import gacha_rank_render as view
 

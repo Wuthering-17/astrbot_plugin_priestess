@@ -9,12 +9,11 @@
 - tl-type.json: 职业类型数据（中英文对照）
 """
 
+from astrbot.api import logger
 import json
-import logging
 from pathlib import Path
 from typing import TypedDict
 
-logger = logging.getLogger("astrbot")
 
 # Bundled read-only recruitment data lives with plugin assets, not runtime state.
 DATA_DIR = Path(__file__).parent / "resources" / "recruit"

@@ -337,7 +337,7 @@ class AccountHealth:
         if skipped:
             lines.append(f"因网络、接口报错或异常跳过 {skipped} 个账号（保留，下次再查）")
         if result["apply"] and result["backups"]:
-            lines.append(f"删除前已备份 {len(result['backups'])} 份：data/plugin_data/astrbot-plugin-priestess/backups/skland-health/")
+            lines.append(f"删除前已备份 {len(result['backups'])} 份：data/plugin_data/astrbot_plugin_priestess/backups/skland-health/")
         if not result["apply"] and (removed_accounts or result.get("invalid_roles")):
             lines.append("发送 /森空岛体检 清理 执行解除")
         return "\n".join(lines)

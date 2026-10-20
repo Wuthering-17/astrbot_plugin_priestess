@@ -1,3 +1,4 @@
+from astrbot.api import logger
 import asyncio
 from pathlib import Path
 from itertools import islice
@@ -5,7 +6,6 @@ from datetime import datetime
 from urllib.parse import quote
 from collections.abc import Iterable
 
-import logging
 
 from rich.text import Text
 from rich.panel import Panel
@@ -13,7 +13,6 @@ from rich.table import Table
 from pydantic import BaseModel, model_validator
 from httpx import Timeout, HTTPError, AsyncClient, TimeoutException
 
-logger = logging.getLogger(__name__)
 from rich.progress import (
     Task,
     TaskID,

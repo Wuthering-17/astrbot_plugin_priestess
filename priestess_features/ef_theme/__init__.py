@@ -137,10 +137,13 @@ async def render_page(html: str, width: int, *, height: int = 800, scale: float 
     """
     import asyncio
 
-    from nonebot_plugin_htmlrender import html_to_pic
+    from ...render_adapter import _html_to_pic, _inline_resources, _inline_remote_images
+    from ...config import TEMPLATES_DIR
 
-    extra = {"template_path": template_path} if template_path else {}
-    image = await html_to_pic(html, type="png", device_scale_factor=scale, viewport={"width": width, "height": height}, **extra)
+    html = _inline_resources(html, TEMPLATES_DIR)
+    html = await _inline_remote_images(html)
+    image_path = await _html_to_pic(html, width=width, height=height, device_scale_factor=scale, base_url=template_path)
+    image = await asyncio.to_thread(Path(image_path).read_bytes)
     return await asyncio.to_thread(to_webp, image, quality)
 
 

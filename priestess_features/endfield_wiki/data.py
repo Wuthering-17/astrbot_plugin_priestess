@@ -11,10 +11,10 @@ the buff files hold what those buffs do to the enemy's attributes.
 
 from __future__ import annotations
 
+from astrbot.api import logger
 import ast
 import asyncio
 import json
-import logging
 import operator
 import re
 import shutil
@@ -107,7 +107,7 @@ async def fetch_json(client: httpx.AsyncClient, url: str, *, headers: dict | Non
                 raise
             if attempt == 2:
                 raise
-            logging.getLogger("astrbot").warning("[Priestess] AKEData 请求临时失败，重试 %s/2: %s", attempt + 1, url)
+            logger.warning("[Priestess] AKEData 请求临时失败，重试 %s/2: %s", attempt + 1, url)
             await asyncio.sleep(attempt + 1)
 
 

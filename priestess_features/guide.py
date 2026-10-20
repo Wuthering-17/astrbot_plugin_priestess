@@ -18,7 +18,7 @@ from .endfield_guide.builds import BuildStore, MIN_SAMPLE
 from .endfield_guide.echoes import EchoStore
 from .endfield_wiki import data as wiki_data
 from .endfield_wiki.lookup import normalize, to_pinyin
-from ..plugins import ef_theme
+from . import ef_theme
 from ..render_adapter import _try_star_html_render
 
 CN = timezone(timedelta(hours=8))

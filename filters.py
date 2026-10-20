@@ -1,12 +1,11 @@
+from astrbot.api import logger
 import json
 from urllib.parse import quote
 from datetime import datetime, timedelta
 
-import logging
 
 from .config import CACHE_DIR
 
-logger = logging.getLogger(__name__)
 
 
 def format_timestamp(timestamp: float) -> str:

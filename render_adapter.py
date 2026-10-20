@@ -6,11 +6,11 @@ AstrBot 也可能提供 html_render（基于 Playwright）。
 本模块优先使用 AstrBot 的 html_render，如果不可用则使用内置 Playwright fallback。
 """
 
+from astrbot.api import logger
 import base64
 import asyncio
 import hashlib
 import html
-import logging
 import time
 from io import BytesIO
 from urllib.parse import unquote, urlsplit
@@ -181,7 +181,7 @@ async def _inline_remote_images(html_content: str) -> str:
                     path.write_bytes(data)
                     return source, f"data:{mime};base64,{base64.b64encode(data).decode()}"
                 except (httpx.HTTPError, OSError, ValueError) as error:
-                    logging.getLogger("astrbot").warning("[Priestess] 抽卡图片资源加载失败 %s: %s", url, type(error).__name__)
+                    logger.warning("[Priestess] 抽卡图片资源加载失败 %s: %s", url, type(error).__name__)
                     return source, source
 
         replacements = dict(await asyncio.gather(*(fetch(source) for source in sources)))
@@ -319,9 +319,7 @@ async def _try_star_html_render(
 
     返回值始终是本地文件路径（因为 event.image_result 需要路径）。
     """
-    import logging
 
-    logger = logging.getLogger("astrbot")
 
     html_content = _inline_resources(html_content, TEMPLATES_DIR)
     html_content = await _inline_remote_images(html_content)
@@ -391,9 +389,7 @@ async def _try_star_html_render(
 
 async def render_ark_card(star, card_data: ArkCard, bg_path: str) -> str:
     """渲染明日方舟角色卡片为图片路径"""
-    import logging
 
-    logger = logging.getLogger("astrbot")
 
     logger.debug("[Skland] 开始渲染方舟卡片模板...")
     template = _jinja_env.get_template("ark_card.html.jinja2")

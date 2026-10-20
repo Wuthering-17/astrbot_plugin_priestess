@@ -1,5 +1,12 @@
 # 更新记录
 
+## v0.1.16
+
+- 根据插件商店审核统一使用 `astrbot.api.logger`，恢复所有 HTTPS 请求的默认 TLS 证书校验。
+- 数据目录统一为 `data/plugin_data/astrbot_plugin_priestess`，首次启动自动迁移旧版目录；新旧目录均有数据时明确报错并保留原数据。
+- 移除重复的 NoneBot 插件与部署代码，仅保留 AstrBot 使用的功能、主题、字体和帮助图；周报改用本插件的 Playwright 渲染入口。
+- 保留 Billtranscend 原作者署名、上游历史、许可证和全部第三方版权声明。
+
 ## v0.1.15
 
 - 参考 Azincc/astrbot_plugin_skland 的群签到呈现，`/全群签到` 改为逐成员显示“方舟 | 终末 | 昵称”，底部汇总角色数量，仍只发送一条消息。

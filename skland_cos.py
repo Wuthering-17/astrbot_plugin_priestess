@@ -308,7 +308,7 @@ async def fetch_cos_images(
 
     did = ""  # device ID，可选，留空即可
 
-    async with httpx.AsyncClient(timeout=TIMEOUT, verify=False) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         # 先确保有 sign token
         await _refresh_token(client, cred_str)
 
@@ -372,7 +372,7 @@ async def _download_image(url: str) -> str:
         本地文件路径
     """
     async with httpx.AsyncClient(
-        timeout=20.0, follow_redirects=True, verify=False
+        timeout=20.0, follow_redirects=True
     ) as client:
         response = await client.get(url, headers={"Referer": "https://www.skland.com/"})
         response.raise_for_status()

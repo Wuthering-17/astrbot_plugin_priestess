@@ -63,6 +63,7 @@ from .render_adapter import (
     render_ef_gacha_history,
 )
 from .utils import call_api_with_refresh
+from .config import DATA_DIR, RES_DIR
 from .skland_cos import fetch_cos_images, _download_image
 
 # 公招模块
@@ -80,7 +81,7 @@ from .priestess_features.sanity import SanityReminder
 from .priestess_features.weekly_report import WeeklyReport
 from .priestess_features.health import AccountHealth
 from .priestess_features.game_calendar.calendar import AstrBotCalendar, ARKNIGHTS_WORDS, COMMAND as CALENDAR_COMMAND
-from .plugins.skland_pools import RERUN
+from .priestess_features.skland_pools import RERUN
 
 
 # ==================== 抽卡记录辅助函数 ====================
@@ -330,7 +331,7 @@ class SklandPlugin(Star):
 
     def __init__(self, context: Context):
         super().__init__(context)
-        self.data_dir = Path("data/plugin_data/astrbot-plugin-priestess")
+        self.data_dir = DATA_DIR
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.data_dir / "skland.db"
         self._qrcode_tasks: dict[str, dict] = {}
@@ -556,7 +557,7 @@ class SklandPlugin(Star):
     @filter.command("skl帮助", alias={"skd帮助", "森空岛帮助"})
     async def cmd_help(self, event: AstrMessageEvent):
         """发送 Priestess 的森空岛指令帮助图。"""
-        help_image = Path(__file__).parent / "plugins" / "skl_help" / "help.webp"
+        help_image = RES_DIR / "help" / "help.webp"
         if help_image.is_file():
             yield event.image_result(str(help_image))
         else:

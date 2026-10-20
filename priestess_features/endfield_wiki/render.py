@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from html import escape
 
-from ...plugins import ef_theme
+from .. import ef_theme
 
 from .data import SKILL_LEVELS
 

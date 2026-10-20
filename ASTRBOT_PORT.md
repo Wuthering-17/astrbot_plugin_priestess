@@ -29,7 +29,7 @@ service is not considered completion of this port.
 | High-difficulty guide | Guide, enemy attributes, speed boards, collection and opt-out commands are wired. | Runtime-check source data refresh and QQ image delivery. |
 | Calendar and scheduled notices | Both game calendars, activity notices and admin preview are wired in Beijing time. | Runtime-check the OneBot broadcast APIs and delivery windows. |
 | Sanity reminder | `/理智`, group subscriptions and a 10-minute background reminder loop are wired. The earlier 90% stamina warning loop remains available too. | Verify mentions, persistence and token refresh through the deployed adapter. |
-| Weekly report | Scheduled Sunday 19:00 report, daily 06:00 admin refresh, preview command, group allowlist at `data/plugin_data/astrbot-plugin-priestess/weekly_report/config.json`, and @all disabled to match the current source setting. | Check report image rendering and NapCat essence/quota API responses on the deployed host. |
+| Weekly report | Scheduled Sunday 19:00 report, daily 06:00 admin refresh, preview command, group allowlist at `data/plugin_data/astrbot_plugin_priestess/weekly_report/config.json`, and @all disabled to match the current source setting. | Check report image rendering and NapCat essence/quota API responses on the deployed host. |
 | Account health | `/森空岛体检` checks bindings and roles; only `/森空岛体检 清理` removes invalid data after writing a 0600 backup. Monday 04:00 job checks and notifies AstrBot admins without deleting data. Missing role defaults are repaired at startup. | The source's unattended scheduled deletion is disabled pending explicit authorization. Existing single-account schema remains; migrated health checks cannot inspect multiple Skland accounts per QQ ID. |
 | Keyword dictionary replies | Not ported. The NoneBot repo depends on external `nonebot-plugin-pErithacus`; its rule data and management implementation are not included in this repository. | Port or replace that external plugin and plan a rule-data migration. |
 | QQ group behavior | OneBot invitation approval and membership change handling are wired. Ordinary image replies are sent as separate AstrBot messages. | Bison subscription queue integration, text-mention command tolerance, and source-style merged-forward labeling are not ported. |
@@ -60,3 +60,7 @@ Original project: **Billtranscend/Priestess-bot**, with original copyright and M
 license retained. AstrBot Skland implementation: **SciNancy/astrbot_plugin_sklands**.
 The publishing repository's maintainer provides the AstrBot interface adaptation
 and compatibility maintenance. See `THIRD_PARTY_NOTICES.md` for all sources.
+
+## v0.1.16 release cleanup
+
+The duplicate NoneBot runtime and standalone deployment files have been removed. Required shared theme/font resources now live under `priestess_features/ef_theme`, and the help image under `resources/help`. Runtime modules use AstrBot logging and default TLS verification. Old AstrBot data directories are migrated without overwriting existing canonical data.
