@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import json
 import math
 import re
 from pathlib import Path
@@ -55,7 +56,6 @@ from .schemas import (
 )
 from .render_adapter import (
     render_ark_card,
-    render_ef_card,
     render_rogue_card,
     render_rogue_info,
     render_clue_board,
@@ -71,6 +71,7 @@ from .recruit_data import RECRUIT_TAG_COUNT
 from .recruit_calc import normalize_tags, calculate_combinations, format_recommendation
 from .recruit_vision import recognize_tags_from_image
 from .priestess_features.wiki import EndfieldWiki
+from .priestess_features.roster import render_ef_roster
 from .priestess_features.guide import CN, EndfieldGuide
 from .priestess_features.gacha_rank import GachaRank
 from .priestess_features.ark_gacha_rank import ArkGachaRank
@@ -364,6 +365,11 @@ class SklandPlugin(Star):
         self._health_stop_event = asyncio.Event()
         self._calendar_task = None
         self._calendar_stop_event = asyncio.Event()
+
+    async def initialize(self):
+        """AstrBot calls this for initial loading and individual plugin reloads."""
+        await init_db(str(self.db_path))
+        self._start_auto_sign_loop()
 
     @filter.on_astrbot_loaded()
     async def on_loaded(self):
@@ -1409,8 +1415,6 @@ class SklandPlugin(Star):
                 async with await get_session() as session:
                     bound = set((await session.execute(select(SkUser.platform_user_id))).scalars().all())
                 users = sorted(set(names) & {str(qq) for qq in bound})
-                totals = {game: {"success": 0, "already": 0, "failed": 0, "errors": 0} for game in ("明日方舟", "终末地")}
-                failures = set()
                 rows = []
                 for qq in users:
                     icons = []
@@ -1418,32 +1422,20 @@ class SklandPlugin(Star):
                         try:
                             results = await sign(sender_id=qq)
                             icons.append(self._group_sign_icon(results))
-                            for result in results or []:
-                                status = "success" if result.startswith("✅") else "already" if result.startswith("ℹ️") else "failed"
-                                totals[game][status] += 1
-                                if status == "failed":
-                                    failures.add(qq)
                         except Exception:
                             # Do not echo API exceptions or credentials into a group summary.
-                            totals[game]["errors"] += 1
-                            failures.add(qq)
                             icons.append("⚠️")
                         await asyncio.sleep(1)
                     nickname = re.sub(r"[\r\n\t\x00-\x1f\x7f]", " ", names[qq]).replace("|", "｜")[:30]
                     rows.append(f"{icons[0]} | {icons[1]} | {nickname}")
-                lines = ["森空岛签到统计", "═══════════════", "方舟 | 终末 | 昵称", "-----------------"]
-                lines.extend(rows or ["本群暂无已绑定成员。"])
-                lines.extend(["═══════════════", "✅ 已签到  ❌ 失败  ⚠️ 部分失败/账号异常  — 无绑定角色", f"本群 {len(names)} 人，处理已绑定成员 {len(users)} 人。"])
-                for game, counts in totals.items():
-                    lines.append(f"{game}：成功 {counts['success']} 个角色，已签到 {counts['already']} 个角色，失败 {counts['failed']} 个角色，账号异常 {counts['errors']} 个。")
-                if failures:
-                    labels = [names[qq].replace("\n", " ")[:30] for qq in sorted(failures)[:10]]
-                    lines.append("需检查绑定的成员：" + "、".join(labels) + (f"等 {len(failures)} 人" if len(failures) > 10 else "") + "。请本人使用 /森空岛签到 查看详情。")
-                lines.append("未绑定成员及未绑定的游戏角色自动跳过。")
-                yield event.plain_result("\n".join(lines))
+                yield event.plain_result(self._group_sign_text(rows))
             except Exception:
                 yield event.plain_result("全群签到未能完成，请检查 NapCat 群成员读取权限及插件数据库后重试。")
         event.stop_event()
+
+    @staticmethod
+    def _group_sign_text(rows: list[str]) -> str:
+        return "\n".join(["森空岛签到统计", "═══════════════", "方舟 | 终末 | 昵称", "-----------------", *(rows or ["本群暂无已绑定成员。"]), "═══════════════", "✅ 已签到  ❌ 失败  ⚠️ 部分失败/账号异常  — 无绑定角色"])
 
     @sk.command("arksign")
     async def cmd_arksign(self, event: AstrMessageEvent):
@@ -1858,7 +1850,7 @@ class SklandPlugin(Star):
 
     @sk.command("efcard")
     async def cmd_efcard(self, event: AstrMessageEvent):
-        """终末地卡片  用法: /sk efcard"""
+        """终末地全干员练度表，含技能、武器与装备。用法: /sk efcard"""
         sender_id = event.get_sender_id()
         async with await get_session() as session:
             user = await get_user_by_platform(session, sender_id)
@@ -1887,8 +1879,7 @@ class SklandPlugin(Star):
                 return
 
             try:
-                bg_path = self._get_bg_path("endfield")
-                image_path = await render_ef_card(self, card_data, bg_path)
+                image_path = await render_ef_roster(card_data)
                 yield event.image_result(image_path)
             except Exception as e:
                 logger.exception(f"[Skland] 渲染终末地卡片失败: {e}")
@@ -2422,30 +2413,119 @@ class SklandPlugin(Star):
     def _start_auto_sign_loop(self):
         if self._auto_sign_task and not self._auto_sign_task.done():
             return
+        now = datetime.now(CN)
+        scheduled = now.replace(hour=0, minute=15, second=0, microsecond=0)
+        # Loading after today's scheduled time must not send catch-up group messages.
+        self._auto_sign_silent_date = now.date().isoformat() if now >= scheduled else ""
         self._auto_sign_stop_event.clear()
         self._auto_sign_task = asyncio.create_task(self._auto_sign_loop())
+        logger.info("[Priestess] 自动签到任务已启动（北京时间 00:15 双游戏签到并群通知；加载或重载后的补签不发群消息）")
 
     async def _auto_sign_loop(self):
+        state_path = self.data_dir / "daily_jobs.json"
+        try:
+            state = json.loads(state_path.read_text("utf-8"))
+            if not isinstance(state, dict):
+                state = {}
+        except (OSError, ValueError):
+            state = {}
         while not self._auto_sign_stop_event.is_set():
             now = datetime.now(CN)
+            today = now.date().isoformat()
             runs = [
-                (now.replace(hour=0, minute=15, second=0, microsecond=0), "arknights"),
-                (now.replace(hour=0, minute=20, second=0, microsecond=0), "endfield"),
+                (now.replace(hour=0, minute=15, second=0, microsecond=0), "skland"),
                 (now.replace(hour=1, minute=0, second=0, microsecond=0), "efgacha"),
             ]
-            next_run = next(((run, game) for run, game in runs if run > now), None)
-            if next_run is None:
-                next_run = (runs[0][0] + timedelta(days=1), runs[0][1])
-            run_at, game = next_run
+            for run_at, game in runs:
+                if run_at > now or state.get(game) == today:
+                    continue
+                if self._auto_sign_stop_event.is_set():
+                    return
+                try:
+                    logger.info("[Priestess] 开始每日任务：%s（%s）", game, today)
+                    if game == "efgacha":
+                        await self._auto_sync_ef_gacha()
+                        complete = True
+                    else:
+                        complete = await self._auto_sign_combined(state, today)
+                    if complete:
+                        state[game] = today
+                    else:
+                        logger.warning("[Priestess] 每日签到存在失败，5 分钟后重试：%s", game)
+                    temporary = state_path.with_suffix(".tmp")
+                    temporary.write_text(json.dumps(state), "utf-8")
+                    temporary.replace(state_path)
+                except Exception:
+                    logger.exception("[Priestess] 每日任务异常，5 分钟后重试：%s", game)
+            future = [run for run, _ in runs if run > now]
+            delay = min(300, max(1, (min(future) - now).total_seconds())) if future else 300
             try:
-                await asyncio.wait_for(self._auto_sign_stop_event.wait(), timeout=max(1, (run_at - now).total_seconds()))
+                await asyncio.wait_for(self._auto_sign_stop_event.wait(), timeout=delay)
                 return
             except asyncio.TimeoutError:
                 pass
-            if game == "efgacha":
-                await self._auto_sync_ef_gacha()
-            else:
-                await self._auto_sign_game(game)
+
+    async def _auto_sign_combined(self, state: dict, today: str) -> bool:
+        daily = state.setdefault("group_sign", {})
+        if daily.get("date") != today:
+            daily.clear()
+            daily.update(date=today, results={}, notified=[])
+        results = daily["results"]
+        complete = True
+        async with await get_session() as session:
+            users = list((await session.execute(select(SkUser.platform_user_id))).scalars().all())
+        async with self._group_sign_lock:
+            for qq in users:
+                icons = results.setdefault(str(qq), {})
+                for game, sign in (("arknights", self._do_ark_sign), ("endfield", self._do_ef_sign)):
+                    if icons.get(game) in ("✅", "—"):
+                        continue
+                    try:
+                        icons[game] = self._group_sign_icon(await sign(sender_id=qq))
+                    except Exception:
+                        icons[game] = "⚠️"
+                        logger.warning("[Priestess] 自动签到账号异常：%s/%s", qq, game)
+                    if icons[game] not in ("✅", "—"):
+                        complete = False
+                    await asyncio.sleep(1)
+            if today == getattr(self, "_auto_sign_silent_date", ""):
+                logger.info("[Priestess] 启动补签结束，本次不发送群通知")
+                return complete
+            platforms = self.context.platform_manager.get_insts()
+            onebots = [p for p in platforms if p.meta().name == "aiocqhttp"]
+            if users and not onebots:
+                return False
+            for platform in onebots:
+                try:
+                    client = platform.get_client()
+                    groups = await client.call_action("get_group_list")
+                    for group in groups:
+                        gid = str(group["group_id"])
+                        key = f"{platform.meta().id}:{gid}"
+                        if key in daily["notified"]:
+                            continue
+                        try:
+                            members = await client.call_action("get_group_member_list", group_id=int(gid))
+                            rows = []
+                            for member in members:
+                                icons = results.get(str(member["user_id"]))
+                                if icons is None:
+                                    continue
+                                name = str(member.get("card") or member.get("nickname") or member["user_id"])
+                                name = re.sub(r"[\r\n\t\x00-\x1f\x7f]", " ", name).replace("|", "｜")[:30]
+                                rows.append(f"{icons['arknights']} | {icons['endfield']} | {name}")
+                            if not rows:
+                                continue
+                            await client.call_action("send_group_msg", group_id=int(gid), message=self._group_sign_text(rows))
+                            daily["notified"].append(key)
+                        except Exception:
+                            complete = False
+                            logger.warning("[Priestess] 自动签到群通知失败：%s", gid)
+                except Exception:
+                    complete = False
+                    logger.warning("[Priestess] 自动签到无法读取 QQ 群列表，稍后重试")
+        logger.info("[Priestess] 双游戏自动签到结束，已通知 %s 个群", len(daily["notified"]))
+        return complete
 
     async def _auto_sync_ef_gacha(self) -> None:
         async with await get_session() as session:
@@ -2502,10 +2582,12 @@ class SklandPlugin(Star):
             except Exception:
                 logger.exception("[Priestess] Automatic Endfield gacha sync failed for one account")
 
-    async def _auto_sign_game(self, game: str) -> None:
+    async def _auto_sign_game(self, game: str) -> bool:
         async with await get_session() as session:
-            users = await get_all_users_with_umos(session)
+            users = list((await session.execute(select(SkUser))).scalars().all())
             user_ids = [user.platform_user_id for user in users]
+        complete = True
+        logger.info("[Priestess] 每日 %s 签到检查 %s 个绑定账号", game, len(user_ids))
         getter = get_ark_characters if game == "arknights" else get_ef_characters
         for platform_user_id in user_ids:
             try:
@@ -2537,10 +2619,14 @@ class SklandPlugin(Star):
                         except Exception as error:
                             message = str(error)
                             if "请勿重复签到" not in message and "已签到" not in message:
+                                complete = False
                                 logger.warning("[Priestess] Daily %s sign-in failed for %s/%s: %s", game, platform_user_id, char.nickname, self._format_error(error))
                     await session.commit()
             except Exception:
+                complete = False
                 logger.exception("[Priestess] Daily %s sign-in failed for one account", game)
+        logger.info("[Priestess] 每日 %s 签到检查结束：%s", game, "全部完成（含已签到）" if complete else "部分失败，稍后重试")
+        return complete
 
     async def _stamina_alert_loop(self):
         """体力预警主循环：每小时检查一次所有绑定用户的体力

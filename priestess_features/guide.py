@@ -265,26 +265,53 @@ class EndfieldGuide:
             lines.extend(f"{rank}. {operators.get(cid, {}).get('name', cid)}：{count} 次（{count / total:.0%}）" for rank, (cid, count) in enumerate(rows, 1))
             return "\n".join(lines)
 
-        endgame = self.endgame()
-        groups, difficulty, error = self._rank_query(endgame, command, query, event)
+        return "暂无出场率记录。"
+
+    async def _speed_board(self, command: str, query: str, event) -> tuple[str, str]:
+        groups, difficulty, error = self._rank_query(self.endgame(), command, query, event)
         if error:
-            return error
+            return "text", error
+        pool, names, data, operators, group_id = await self._member_data(event, strict=True)
+        requester = str(event.get_sender_id()) if event is not None else ""
         limit = 20 if len(groups) == 1 else 5
-        lines = ["高难竞速榜 · 本群最快通关记录"]
+        boards = []
         for group in groups:
             selected = difficulty if difficulty and any(stage["difficulty"] == difficulty for stage in group["stages"]) else self._top_difficulty(group)
             ranking = echoes.speed_ranking(data, pool, f"{group['name']}|{selected}")
-            lines.append(f"\n{group['name']} · {selected}")
-            if not ranking:
-                lines.append("暂无记录")
-                continue
-            shown = ranking[:limit]
-            for rank, (qq, record) in enumerate(shown, 1):
+            shown = list(enumerate(ranking, 1))[:limit]
+            me = next((i for i, (qq, _) in enumerate(ranking, 1) if qq == requester), None)
+            if me and me > limit:
+                shown.append((me, ranking[me - 1]))
+            ids = {char.get("id", "") for _, (_, record) in shown for char in record.get("team", [])} & operators.keys()
+            sources = await asyncio.gather(*(self.wiki._cached_image(wiki_data.char_icon_url(cid), f"chr_{cid}.png") for cid in sorted(ids)))
+            icons = dict(zip(sorted(ids), sources))
+            rows = []
+            for rank, (qq, record) in shown:
                 seconds = int(record["time"])
                 duration = f"{seconds // 60}:{seconds % 60:02d}"
                 plus = " · 增辉" if record.get("plus") else ""
-                lines.append(f"{rank}. {names.get(qq, qq)}　{duration}{plus}")
-        return "\n".join(lines)
+                team = []
+                for char in record.get("team", []):
+                    cid = char.get("id", "")
+                    name = escape(operators.get(cid, {}).get("name", cid))
+                    src = icons.get(cid)
+                    image = f'<img src="{escape(src, quote=True)}">' if src else '<i class="ph"></i>'
+                    team.append(f'<span class="mini">{image}<span>{name}</span><em>{escape(str(char.get("lv", "?")))}·{escape(str(char.get("pot", "?")))}</em></span>')
+                stamp = record.get("collected_at", 0)
+                updated = datetime.fromtimestamp(stamp, CN).strftime("%m-%d %H:%M") if stamp else "采集时间未知"
+                medal = f" r{rank}" if rank <= 3 else ""
+                mark = ' class="me"' if qq == requester else ""
+                rows.append(f'<tr{mark}><td class="rk"><span class="ef-rank{medal}">{rank}</span></td><td class="nm">{escape(names.get(qq, qq))}</td><td class="tm">{duration}<small>{plus.removeprefix(" · ")}</small><small>{updated}</small></td><td>{"".join(team) or "阵容未知"}</td></tr>')
+            heading = f'{escape(group["name"])} · {escape(selected)}'
+            content = f'<table>{"".join(rows)}</table>' if rows else '<div class="ef-empty">暂无通关用时记录，请管理员执行 /配队数据更新。</div>'
+            boards.append(f'<section class="ef-sec"><h3>{heading}<small class="cjk">{len(ranking)} 人有用时记录</small></h3>{content}</section>')
+        # Layout adapted from Billtranscend/Priestess-bot's original speed board.
+        css = '''body{width:1100px;padding:26px}table{width:100%;border-collapse:collapse}td{padding:10px;border-top:1px solid var(--ef-line-2);font-size:18px;vertical-align:middle}tr.me td{background:rgba(255,225,0,.22)}td.rk{width:50px;text-align:center}td.nm{width:230px;max-width:230px;overflow-wrap:anywhere}td.tm{width:150px;font-family:var(--ef-num);font-size:28px;font-weight:700;white-space:nowrap}td.tm small{display:block;font-size:13px;color:var(--ef-sub)}.mini{display:inline-block;width:115px;text-align:center;vertical-align:top}.mini img,.mini .ph{display:block;margin:auto;width:54px;height:54px;object-fit:contain;background:var(--ef-panel-2)}.mini span{display:block;font-size:14px;overflow-wrap:anywhere}.mini em{display:block;font-style:normal;font-size:13px;color:var(--ef-sub)}'''
+        subtitle = f'{"本群" if group_id else "个人"}最快通关记录 · 每关前 {limit} 名；另列出自己的排名，黄色标记自己'
+        html = '<!doctype html><html><head><meta charset="utf-8"><style>' + ef_theme.css() + css + '</style></head><body class="ef">'
+        html += ef_theme.head("Endfield · Speed Ranking", "高难 · <em>竞速榜</em>", subtitle)
+        html += "".join(boards) + ef_theme.foot("来源：森空岛最佳记录；阵容数字为等级·潜能，小字为采集时间。接口失败可能保留旧记录。<br>更新：/配队数据更新；退出统计：/攻略统计 退出") + '</body></html>'
+        return "image", await self._render(html, width=1100)
 
     async def page(self, command: str, query: str = "", event=None) -> tuple[str, str, str]:
         """Return (kind, value, follow-up text); kinds are text, image, or miss."""
@@ -293,7 +320,11 @@ class EndfieldGuide:
             return "text", "终末地攻略资料尚未同步，请稍后再试。", ""
         version = self.version()
 
-        if command in ("竞速榜", "回响竞速", "丰碑竞速", "榜单角色出场率"):
+        if command in ("竞速榜", "回响竞速", "丰碑竞速"):
+            kind, value = await self._speed_board(command, query, event)
+            return kind, value, ""
+
+        if command == "榜单角色出场率":
             return "text", await self._leaderboard(command, query, event), ""
 
         if command == "战争回响":

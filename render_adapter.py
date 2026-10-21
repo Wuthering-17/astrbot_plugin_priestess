@@ -440,7 +440,7 @@ async def render_ef_card(
     star,
     card_data: EndfieldCard,
     bg_path: str,
-    show_all: bool = False,
+    show_all: bool = True,
     is_simple: bool = False,
 ) -> str:
     """渲染终末地角色卡片为图片路径"""
