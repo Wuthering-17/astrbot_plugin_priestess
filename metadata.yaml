@@ -1,5 +1,5 @@
 name: astrbot_plugin_priestess
-display_name: Priestess Bot
+display_name: 普瑞赛斯bot
 desc: "基于 Billtranscend/Priestess-bot 的 AstrBot 接口适配，支持明日方舟与终末地。"
 version: v0.1.18
 author: "Billtranscend（原作者）；Wuthering-17（AstrBot 接口适配维护）"

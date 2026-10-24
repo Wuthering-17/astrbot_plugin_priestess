@@ -1,4 +1,4 @@
-# Priestess Bot
+# 普瑞赛斯bot
 
 <img src="logo.png" width="96" height="96" alt="普瑞赛斯官方剧情 CG 图标" align="right">
 

@@ -44,7 +44,7 @@ def help_html() -> str:
     main{columns:2;column-gap:25px}section{break-inside:avoid;background:#25313d;padding:20px;margin:0 0 24px;border-top:3px solid #f2da61}
     h2{font-size:28px;color:#f2da61;margin:0 0 12px}table{border-collapse:collapse;width:100%;font-size:18px;line-height:1.65}
     td{border-top:1px solid #43505d;padding:8px 5px;vertical-align:top}td:first-child{width:53%}code{color:#f5e49a;overflow-wrap:anywhere}footer{margin-top:24px;font-size:20px;color:#c6cfd7;line-height:1.8}
-    </style><header><h1>Priestess Bot · ''' + escape(version) + '''</h1><p>明日方舟 × 终末地 · AstrBot / NapCat 指令速查</p></header><main>''' + "".join(blocks) + '''</main><footer>
+    </style><header><h1>普瑞赛斯bot · ''' + escape(version) + '''</h1><p>明日方舟 × 终末地 · AstrBot / NapCat 指令速查</p></header><main>''' + "".join(blocks) + '''</main><footer>
     00:15 双游戏签到；启动补签不发群汇总。活动通知须分别配置两款游戏的发送群，默认留空。<br>
     管理命令需 AstrBot 管理员权限。完整配置与适配差异见仓库 README。<br>
     原项目：Billtranscend/Priestess-bot · Wuthering-17 仅负责 AstrBot 接口适配与维护 · 第三方许可见仓库声明。
