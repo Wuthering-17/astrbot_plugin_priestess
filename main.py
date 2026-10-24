@@ -15,7 +15,7 @@ from sqlalchemy import select
 import astrbot.api.message_components as Comp
 from astrbot.api.event import filter, AstrMessageEvent, MessageChain
 from astrbot.api.star import Context, Star
-from astrbot.api import logger
+from astrbot.api import logger, AstrBotConfig
 
 from .db import (
     init_db,
@@ -64,6 +64,8 @@ from .render_adapter import (
 )
 from .utils import call_api_with_refresh
 from .config import DATA_DIR, RES_DIR
+from .network_clock import network_clock
+from .notifications import notification_enabled
 from .skland_cos import fetch_cos_images, _download_image
 
 # 公招模块
@@ -81,6 +83,7 @@ from .priestess_features.ark_heybox import ArkHeyboxImporter
 from .priestess_features.sanity import SanityReminder
 from .priestess_features.weekly_report import WeeklyReport
 from .priestess_features.health import AccountHealth
+from .priestess_features.sign_failure import SignFailureNotifier
 from .priestess_features.game_calendar.calendar import AstrBotCalendar, ARKNIGHTS_WORDS, COMMAND as CALENDAR_COMMAND
 from .priestess_features.skland_pools import RERUN
 
@@ -330,8 +333,10 @@ async def get_all_ef_gacha_records(
 class SklandPlugin(Star):
     """森空岛插件：查询鹰角网络旗下游戏数据"""
 
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, config: AstrBotConfig | None = None):
         super().__init__(context)
+        self.plugin_config = config if config is not None else {}
+        self.sign_failure = SignFailureNotifier(self)
         self.data_dir = DATA_DIR
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.data_dir / "skland.db"
@@ -370,6 +375,13 @@ class SklandPlugin(Star):
         """AstrBot calls this for initial loading and individual plugin reloads."""
         await init_db(str(self.db_path))
         self._start_auto_sign_loop()
+        self._start_wiki_sync_loop()
+        self._start_calendar_loop()
+        self._start_guide_collection_loop()
+        self._start_stamina_alert_loop()
+        self._start_sanity_reminder_loop()
+        self._start_weekly_report_loop()
+        self._start_health_loop()
 
     @filter.on_astrbot_loaded()
     async def on_loaded(self):
@@ -480,26 +492,42 @@ class SklandPlugin(Star):
         self._guide_stop_event.clear()
         self._guide_task = asyncio.create_task(self._guide_collection_loop())
 
+    @staticmethod
+    def _next_guide_collection(now):
+        jobs = [(3, 0, "builds"), (5, 30, "clears"), (17, 30, "clears")]
+        runs = []
+        for hour, minute, kind in jobs:
+            run = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if run <= now:
+                run += timedelta(days=1)
+            runs.append((run, kind))
+        return min(runs, key=lambda item: item[0])
+
+    async def _run_guide_collection(self, kind):
+        try:
+            logger.info("[Priestess] Starting Endfield %s collection", kind)
+            if kind == "builds":
+                result = await self.guide.collect(builds_only=True)
+            else:
+                result = await self.guide.collect(teams_only=self.guide.build_store.current())
+            logger.info("[Priestess] Endfield collection finished: %s", result)
+        except Exception:
+            logger.exception("[Priestess] Endfield collection failed")
+
     async def _guide_collection_loop(self):
         try:
             await asyncio.wait_for(self._guide_stop_event.wait(), timeout=30)
             return
         except asyncio.TimeoutError:
             pass
+        await self._run_guide_collection("clears")
         while not self._guide_stop_event.is_set():
-            try:
-                logger.info("[Priestess] Starting Endfield clear and equipment collection")
-                result = await self.guide.collect()
-                logger.info("[Priestess] Endfield collection finished: %s", result)
-            except Exception:
-                logger.exception("[Priestess] Endfield collection failed")
             now = datetime.now(CN)
-            runs = [now.replace(hour=5, minute=30, second=0, microsecond=0), now.replace(hour=17, minute=30, second=0, microsecond=0)]
-            next_run = next((run for run in runs if run > now), runs[0] + timedelta(days=1))
+            next_run, kind = self._next_guide_collection(now)
             try:
                 await asyncio.wait_for(self._guide_stop_event.wait(), timeout=max(1, (next_run - now).total_seconds()))
             except asyncio.TimeoutError:
-                pass
+                await self._run_guide_collection(kind)
 
     def _start_calendar_loop(self):
         if self._calendar_task and not self._calendar_task.done():
@@ -834,7 +862,7 @@ class SklandPlugin(Star):
     async def _selected_character(self, session, user: SkUser, game: str, event: AstrMessageEvent) -> Character | None:
         getter = get_ark_characters if game == "arknights" else get_ef_characters
         chars = self._ordered_characters(await getter(session, user))
-        match = re.search(r"(?:^|\s)-r\s+(\d+)\s*$", event.get_message_str().strip())
+        match = re.search(r"(?:^|\s)-r\s+(\d+)(?=\s|$)", event.get_message_str().strip())
         if match:
             index = int(match.group(1))
             return chars[index - 1] if 1 <= index <= len(chars) else None
@@ -1002,7 +1030,7 @@ class SklandPlugin(Star):
             return
         label = "配队" if teams_only else "配装" if builds_only else "高难战绩及配装"
         logger.info("[Priestess] Manual %s collection command entered", label)
-        yield event.plain_result(f"开始采集绑定用户默认终末地角色的{label}数据，请稍候。")
+        yield event.plain_result(f"开始采集绑定用户默认终末地角色的{label}数据，请稍候；采集期间每完成 50 人保存一次，榜单会陆续更新。")
         try:
             result = await self.guide.collect(builds_only=builds_only, **({"teams_only": True} if teams_only else {}))
             if teams_only:
@@ -1089,6 +1117,7 @@ class SklandPlugin(Star):
 
         self._qrcode_tasks[scan_id] = {
             "umo": umo,
+            "binding_group": self._binding_group(event),
             "sender_id": sender_id,
             "qrcode_msg_id": qrcode_msg_id,
             "event": event if 'AiocqhttpMessageEvent' in str(type(event)) else None,
@@ -1126,6 +1155,7 @@ class SklandPlugin(Star):
                         existing.cred_token = cred_data.token
                         existing.access_token = token
                         existing.umo = umo
+                        existing.binding_group = task_info.get("binding_group")
                         if skland_user_id:
                             existing.user_id = skland_user_id
                         user = existing
@@ -1137,6 +1167,7 @@ class SklandPlugin(Star):
                             cred=cred_data.cred,
                             cred_token=cred_data.token,
                             umo=umo,
+                            binding_group=task_info.get("binding_group"),
                         )
                         session.add(user)
                         await session.flush()
@@ -1226,9 +1257,10 @@ class SklandPlugin(Star):
                 existing.cred = cred
                 existing.cred_token = cred_token
                 existing.umo = umo
+                existing.binding_group = self._binding_group(event)
                 user = existing
             else:
-                user = SkUser(platform_user_id=sender_id, cred=cred, cred_token=cred_token, umo=umo)
+                user = SkUser(platform_user_id=sender_id, cred=cred, cred_token=cred_token, umo=umo, binding_group=self._binding_group(event))
                 session.add(user)
                 await session.flush()
 
@@ -1393,6 +1425,29 @@ class SklandPlugin(Star):
         if all(signed):
             return "✅"
         return "⚠️" if any(signed) else "❌"
+
+    @staticmethod
+    def _binding_group(event: AstrMessageEvent) -> str | None:
+        if event.get_platform_name() == "aiocqhttp" and event.get_group_id():
+            return f"{event.get_platform_id()}:{event.get_group_id()}"
+        return None
+
+    @filter.command("签到通知", priority=10)
+    async def cmd_sign_notification(self, event: AstrMessageEvent):
+        argument = self._command_argument(event).strip()
+        target = self._binding_group(event)
+        if argument not in ("本群", "关闭") or (argument == "本群" and not target):
+            yield event.plain_result("在希望接收签到通知的 QQ 群发送 /签到通知 本群；发送 /签到通知 关闭 可关闭自己的群通知。")
+        else:
+            async with await get_session() as session:
+                user = await get_user_by_platform(session, event.get_sender_id())
+                if user is None:
+                    yield event.plain_result("请先绑定森空岛账号。")
+                else:
+                    user.binding_group = target if argument == "本群" else None
+                    await session.commit()
+                    yield event.plain_result("已将你的自动签到通知设为本群，其他群不再展示你的签到信息。" if argument == "本群" else "已关闭你的自动签到群通知，自动签到继续执行。")
+        event.stop_event()
 
     @filter.command("全群签到", alias={"群签到", "森空岛群签到"}, priority=10)
     async def cmd_group_sign(self, event: AstrMessageEvent):
@@ -1813,11 +1868,15 @@ class SklandPlugin(Star):
     @sk.command("arkcard")
     async def cmd_arkcard(self, event: AstrMessageEvent):
         """明日方舟卡片  用法: /sk arkcard"""
-        sender_id = event.get_sender_id()
+        sender_id, error = await self._card_target(event)
+        if error:
+            yield event.plain_result(error)
+            event.stop_event()
+            return
         async with await get_session() as session:
             user = await get_user_by_platform(session, sender_id)
             if not user:
-                yield event.plain_result(self._sk("未绑定森空岛账号."))
+                yield event.plain_result(self._sk("该成员未绑定森空岛账号。" if sender_id != event.get_sender_id() else "未绑定森空岛账号。"))
                 event.stop_event()
                 return
             char = await self._selected_character(session, user, "arknights", event)
@@ -1851,11 +1910,15 @@ class SklandPlugin(Star):
     @sk.command("efcard")
     async def cmd_efcard(self, event: AstrMessageEvent):
         """终末地全干员练度表，含技能、武器与装备。用法: /sk efcard"""
-        sender_id = event.get_sender_id()
+        sender_id, error = await self._card_target(event)
+        if error:
+            yield event.plain_result(error)
+            event.stop_event()
+            return
         async with await get_session() as session:
             user = await get_user_by_platform(session, sender_id)
             if not user:
-                yield event.plain_result(self._sk("未绑定森空岛账号."))
+                yield event.plain_result(self._sk("该成员未绑定森空岛账号。" if sender_id != event.get_sender_id() else "未绑定森空岛账号。"))
                 event.stop_event()
                 return
             char = await self._selected_character(session, user, "endfield", event)
@@ -1885,6 +1948,24 @@ class SklandPlugin(Star):
                 logger.exception(f"[Skland] 渲染终末地卡片失败: {e}")
                 yield event.plain_result(self._sk(f"卡片渲染失败: {e}"))
             event.stop_event()
+
+    async def _card_target(self, event: AstrMessageEvent) -> tuple[str, str]:
+        sender = str(event.get_sender_id())
+        targets = {str(segment.qq) for segment in event.get_messages() if isinstance(segment, Comp.At) and str(segment.qq) not in ("all", str(event.get_self_id()))}
+        if len(targets) > 1:
+            return sender, "一次只能 @ 一位群友查看角色卡。"
+        if not targets or targets == {sender}:
+            return sender, ""
+        if event.get_platform_name() != "aiocqhttp" or not event.get_group_id():
+            return sender, "请在 QQ 群内 @ 一位群友查看角色卡。"
+        target = targets.pop()
+        try:
+            members = await event.bot.call_action("get_group_member_list", group_id=int(event.get_group_id()))
+        except Exception:
+            return sender, "无法读取本群成员，请检查 NapCat 连接后重试。"
+        if target not in {str(member["user_id"]) for member in members}:
+            return sender, "被 @ 的用户不是当前群成员。"
+        return target, ""
 
     # ==================== 肉鸽战绩 ====================
 
@@ -2413,10 +2494,8 @@ class SklandPlugin(Star):
     def _start_auto_sign_loop(self):
         if self._auto_sign_task and not self._auto_sign_task.done():
             return
-        now = datetime.now(CN)
-        scheduled = now.replace(hour=0, minute=15, second=0, microsecond=0)
-        # Loading after today's scheduled time must not send catch-up group messages.
-        self._auto_sign_silent_date = now.date().isoformat() if now >= scheduled else ""
+        # Decide catch-up notification policy only after obtaining trusted time.
+        self._auto_sign_silent_date = None
         self._auto_sign_stop_event.clear()
         self._auto_sign_task = asyncio.create_task(self._auto_sign_loop())
         logger.info("[Priestess] 自动签到任务已启动（北京时间 00:15 双游戏签到并群通知；加载或重载后的补签不发群消息）")
@@ -2430,7 +2509,18 @@ class SklandPlugin(Star):
         except (OSError, ValueError):
             state = {}
         while not self._auto_sign_stop_event.is_set():
-            now = datetime.now(CN)
+            if not await network_clock.ensure_synced():
+                await self.sign_failure.notify(state, "待网络校时", {"clock": "网络校时失败：自动签到暂缓执行，等待取得可信时间。"}, category="clock_failure_private")
+                self._save_daily_jobs(state_path, state)
+                try:
+                    await asyncio.wait_for(self._auto_sign_stop_event.wait(), timeout=300)
+                    return
+                except asyncio.TimeoutError:
+                    continue
+            now = network_clock.now(CN)
+            if self._auto_sign_silent_date is None:
+                scheduled = now.replace(hour=0, minute=15, second=0, microsecond=0)
+                self._auto_sign_silent_date = now.date().isoformat() if now >= scheduled else ""
             today = now.date().isoformat()
             runs = [
                 (now.replace(hour=0, minute=15, second=0, microsecond=0), "skland"),
@@ -2447,16 +2537,18 @@ class SklandPlugin(Star):
                         await self._auto_sync_ef_gacha()
                         complete = True
                     else:
+                        await network_clock.ensure_synced(force=True)
                         complete = await self._auto_sign_combined(state, today)
                     if complete:
                         state[game] = today
                     else:
                         logger.warning("[Priestess] 每日签到存在失败，5 分钟后重试：%s", game)
-                    temporary = state_path.with_suffix(".tmp")
-                    temporary.write_text(json.dumps(state), "utf-8")
-                    temporary.replace(state_path)
+                    self._save_daily_jobs(state_path, state)
                 except Exception:
                     logger.exception("[Priestess] 每日任务异常，5 分钟后重试：%s", game)
+                    if game == "skland":
+                        await self.sign_failure.notify(state, today, {"sign-job": "自动签到任务异常中断，尚未完成；请查看机器人日志。"}, category="sign_job_failure_private")
+                        self._save_daily_jobs(state_path, state)
             future = [run for run, _ in runs if run > now]
             delay = min(300, max(1, (min(future) - now).total_seconds())) if future else 300
             try:
@@ -2464,6 +2556,12 @@ class SklandPlugin(Star):
                 return
             except asyncio.TimeoutError:
                 pass
+
+    @staticmethod
+    def _save_daily_jobs(path: Path, state: dict) -> None:
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(state), "utf-8")
+        temporary.replace(path)
 
     async def _auto_sign_combined(self, state: dict, today: str) -> bool:
         daily = state.setdefault("group_sign", {})
@@ -2473,7 +2571,12 @@ class SklandPlugin(Star):
         results = daily["results"]
         complete = True
         async with await get_session() as session:
-            users = list((await session.execute(select(SkUser.platform_user_id))).scalars().all())
+            bound = list((await session.execute(select(SkUser.platform_user_id, SkUser.binding_group))).all())
+            users = [qq for qq, _ in bound]
+            targets = {}
+            for qq, target in bound:
+                if target:
+                    targets.setdefault(target, set()).add(str(qq))
         async with self._group_sign_lock:
             for qq in users:
                 icons = results.setdefault(str(qq), {})
@@ -2488,26 +2591,40 @@ class SklandPlugin(Star):
                     if icons[game] not in ("✅", "—"):
                         complete = False
                     await asyncio.sleep(1)
+            issues = {
+                f"{qq}:{game}": f"{label}：QQ {qq} 签到失败或账号异常。"
+                for qq in users for game, label in (("arknights", "明日方舟"), ("endfield", "终末地"))
+                if results[str(qq)].get(game) not in ("✅", "—")
+            }
+            if not await self.sign_failure.notify(state, today, issues):
+                complete = False
             if today == getattr(self, "_auto_sign_silent_date", ""):
                 logger.info("[Priestess] 启动补签结束，本次不发送群通知")
                 return complete
+            if not notification_enabled(self, "daily_sign_group"):
+                return complete
             platforms = self.context.platform_manager.get_insts()
             onebots = [p for p in platforms if p.meta().name == "aiocqhttp"]
-            if users and not onebots:
+            if targets and not onebots:
                 return False
+            remaining = set(targets)
             for platform in onebots:
                 try:
                     client = platform.get_client()
-                    groups = await client.call_action("get_group_list")
-                    for group in groups:
-                        gid = str(group["group_id"])
-                        key = f"{platform.meta().id}:{gid}"
+                    prefix = f"{platform.meta().id}:"
+                    for key, eligible in targets.items():
+                        if not key.startswith(prefix):
+                            continue
+                        remaining.discard(key)
+                        gid = key[len(prefix):]
                         if key in daily["notified"]:
                             continue
                         try:
                             members = await client.call_action("get_group_member_list", group_id=int(gid))
                             rows = []
                             for member in members:
+                                if str(member["user_id"]) not in eligible:
+                                    continue
                                 icons = results.get(str(member["user_id"]))
                                 if icons is None:
                                     continue
@@ -2523,7 +2640,9 @@ class SklandPlugin(Star):
                             logger.warning("[Priestess] 自动签到群通知失败：%s", gid)
                 except Exception:
                     complete = False
-                    logger.warning("[Priestess] 自动签到无法读取 QQ 群列表，稍后重试")
+                    logger.warning("[Priestess] 自动签到无法访问绑定群，稍后重试")
+            if remaining:
+                complete = False
         logger.info("[Priestess] 双游戏自动签到结束，已通知 %s 个群", len(daily["notified"]))
         return complete
 
@@ -2699,7 +2818,7 @@ class SklandPlugin(Star):
         alert = await get_or_create_stamina_alert(session, user.id, char.uid, "arknights")
 
         if ratio >= 0.9:
-            if not alert.alerted:
+            if not alert.alerted and notification_enabled(self, "stamina_arknights"):
                 msg = (
                     f"[Sklands 体力预警]\n"
                     f"游戏：明日方舟\n"
@@ -2749,7 +2868,7 @@ class SklandPlugin(Star):
         alert = await get_or_create_stamina_alert(session, user.id, char.uid, "endfield")
 
         if ratio >= 0.9:
-            if not alert.alerted:
+            if not alert.alerted and notification_enabled(self, "stamina_endfield"):
                 msg = (
                     f"[Sklands 体力预警]\n"
                     f"游戏：终末地\n"

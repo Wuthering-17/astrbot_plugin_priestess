@@ -29,7 +29,9 @@ from .builds import CARD_URL, BuildStore, extract
 WAR_ECHOES_URL = "https://zonai.skland.com/api/v1/game/endfield/card/war-echoes"
 INDIE_HARD_URL = "https://zonai.skland.com/api/v1/game/endfield/card/indie-hard"  # 影拓丰碑
 DIFFICULTY_FIELDS = (("normalDungeon", "普通"), ("hardDungeon", "困难"), ("cruelDungeon", "残酷"))
-REQUEST_GAP = 2.0
+REQUEST_GAP = 2.0  # between each worker's requests
+WORKERS = 5
+SAVE_EVERY = 50
 ECHO_SCHEMA = 2  # 2: keep the fastest clear when a stage recurs across seasons (1 kept the latest)
 
 
@@ -119,83 +121,111 @@ class EchoStore:
             for qq in list(build_members):
                 if qq not in bound_qqs or qq in optout:
                     build_members.pop(qq, None)
-            for done, (user_id, platform_user_id) in enumerate(binds, 1):
-                qq = str(platform_user_id)
-                if done % 20 == 0:
-                    logger.info(f"War Echoes collection progress: {done}/{len(binds)} binds, {dict(stats)}")
-                if qq in optout:
-                    data["members"].pop(qq, None)
-                    stats["opted_out"] += 1
-                    continue
-                user = await session.get(SkUser, user_id)
-                if user is None:
-                    continue
-                # One entry per member: their default Endfield role (unbound since the last
-                # run, or no such role: no stale clears on the boards).
-                char = await get_default_ef_character(session, user)
-                if char is None:
-                    stats["dropped"] += data["members"].pop(qq, None) is not None
-                    build_members.pop(qq, None)
-                    continue
-                stats["eligible"] += 1
-                if not builds_only:
-                    old = data["members"].get(qq, {})
-                    sources = dict(old.get("sources") or {})
-                    fresh = 0
-                    layout = self.layout()
-                    for source, url, field in (("echoes", WAR_ECHOES_URL, "warEchoes"), ("monument", INDIE_HARD_URL, "indieHard")):
-                        for attempt in range(2):
-                            try:
-                                payload = (await _fetch(url, user, char))[field]
-                                if source == "echoes":
-                                    records, targets = _extract(payload)
-                                    data["targets"].update(targets)
-                                    layout["seasons"] = extract_layout(payload, {})["seasons"]
-                                else:
-                                    records = _extract_monument(payload)
-                                    layout["monument"] = extract_layout({}, payload)["monument"]
-                                stamp = time.time()
-                                for record in records.values():
-                                    record["collected_at"] = stamp
-                                sources[source] = {"ts": stamp, "records": records}
-                                stats[source] += 1
-                                fresh += 1
-                                break
-                            except Exception as e:
-                                if isinstance(e, RecordError) or attempt:
-                                    stats[type(e).__name__] += 1
-                                    stats[f"{source}_failed"] += 1
-                                    break
-                                await asyncio.sleep(REQUEST_GAP * 2)
-                        await asyncio.sleep(REQUEST_GAP)
-                    self.save_layout(layout)
-                    if fresh:
-                        # Legacy records have no source: keep them until both sources succeed.
-                        legacy = {} if len(sources) == 2 else old.get("legacy_records", old.get("records", {}) if not old.get("sources") else {})
-                        for record in legacy.values():
-                            record.setdefault("collected_at", old.get("ts", 0))
-                        records = dict(legacy)
-                        for snapshot in sources.values():
-                            records.update(snapshot["records"])
-                        data["members"][qq] = {"ts": time.time(), "sources": sources, "legacy_records": legacy, "records": records}
-                        stats["ok"] += 1
-                    elif old:
-                        stats["retained"] += 1
-                if builds is not None:
-                    try:  # a failure keeps the member's previous snapshot
-                        await asyncio.sleep(REQUEST_GAP)
-                        card = await _fetch(CARD_URL, user, char)
-                        chars = extract(card.get("detail") or {})
-                        build_members[qq] = {"ts": time.time(), "chars": chars}
-                        stats["builds"] += 1
-                        stats["build_operators"] += len(chars)
-                        stats["builds_empty"] += not chars
+        queue: asyncio.Queue = asyncio.Queue()
+        for bind in binds:
+            queue.put_nowait(bind)
+        done = 0
+
+        async def worker() -> None:
+            nonlocal done
+            # SQLAlchemy sessions cannot be shared across concurrent tasks.
+            async with await get_session() as session:
+                session.autoflush = False
+                while not queue.empty():
+                    user_id, platform_user_id = queue.get_nowait()
+                    await self._member(session, user_id, platform_user_id, data, stats, optout, builds, build_members, builds_only=builds_only)
+                    done += 1
+                    if done % 20 == 0:
+                        logger.info(f"War Echoes collection progress: {done}/{len(binds)} binds, {dict(stats)}")
+                    if done % SAVE_EVERY == 0:
+                        data["schema"] = ECHO_SCHEMA
+                        self._save(data)
+                        if builds is not None:
+                            builds.save(build_members)
+
+        try:
+            async with asyncio.TaskGroup() as group:
+                for _ in range(WORKERS):
+                    group.create_task(worker())
+        except ExceptionGroup as failed:
+            raise failed.exceptions[0] from None
+
+    async def _member(self, session, user_id: int, platform_user_id: str, data: dict, stats: Counter, optout: set[str], builds: BuildStore | None, build_members: dict, *, builds_only: bool = False) -> None:
+        qq = str(platform_user_id)
+        if qq in optout:
+            data["members"].pop(qq, None)
+            stats["opted_out"] += 1
+            return
+        user = await session.get(SkUser, user_id)
+        if user is None:
+            return
+        # One entry per member: their default Endfield role (unbound since the last
+        # run, or no such role: no stale clears on the boards).
+        char = await get_default_ef_character(session, user)
+        if char is None:
+            stats["dropped"] += data["members"].pop(qq, None) is not None
+            build_members.pop(qq, None)
+            return
+        stats["eligible"] += 1
+        if not builds_only:
+            old = data["members"].get(qq, {})
+            sources = dict(old.get("sources") or {})
+            fresh = 0
+            for source, url, field in (("echoes", WAR_ECHOES_URL, "warEchoes"), ("monument", INDIE_HARD_URL, "indieHard")):
+                for attempt in range(2):
+                    try:
+                        payload = (await _fetch(url, user, char))[field]
+                        if source == "echoes":
+                            records, targets = _extract(payload)
+                            data["targets"].update(targets)
+                            layout = self.layout()
+                            layout["seasons"] = extract_layout(payload, {})["seasons"]
+                        else:
+                            records = _extract_monument(payload)
+                            layout = self.layout()
+                            layout["monument"] = extract_layout({}, payload)["monument"]
+                        self.save_layout(layout)
+                        stamp = time.time()
+                        for record in records.values():
+                            record["collected_at"] = stamp
+                        sources[source] = {"ts": stamp, "records": records}
+                        stats[source] += 1
+                        fresh += 1
+                        break
                     except Exception as e:
-                        stats[f"builds_{type(e).__name__}"] += 1
-                # Persist refreshed tokens now: a write left pending across the whole run would hold
-                # SQLite's write lock for minutes and make binding / gacha updates fail.
-                await _commit(session, stats)
+                        if isinstance(e, RecordError) or attempt:
+                            stats[type(e).__name__] += 1
+                            stats[f"{source}_failed"] += 1
+                            break
+                        await asyncio.sleep(REQUEST_GAP * 2)
                 await asyncio.sleep(REQUEST_GAP)
+            if fresh:
+                # Legacy records have no source: keep them until both sources succeed.
+                legacy = {} if len(sources) == 2 else old.get("legacy_records", old.get("records", {}) if not old.get("sources") else {})
+                for record in legacy.values():
+                    record.setdefault("collected_at", old.get("ts", 0))
+                records = dict(legacy)
+                for snapshot in sources.values():
+                    records.update(snapshot["records"])
+                data["members"][qq] = {"ts": time.time(), "sources": sources, "legacy_records": legacy, "records": records}
+                stats["ok"] += 1
+            elif old:
+                stats["retained"] += 1
+        if builds is not None:
+            try:  # a failure keeps the member's previous snapshot
+                await asyncio.sleep(REQUEST_GAP)
+                card = await _fetch(CARD_URL, user, char)
+                chars = extract(card.get("detail") or {})
+                build_members[qq] = {"ts": time.time(), "chars": chars}
+                stats["builds"] += 1
+                stats["build_operators"] += len(chars)
+                stats["builds_empty"] += not chars
+            except Exception as e:
+                stats[f"builds_{type(e).__name__}"] += 1
+        # Persist refreshed tokens now: a write left pending across the whole run would hold
+        # SQLite's write lock for minutes and make binding / gacha updates fail.
+        await _commit(session, stats)
+        await asyncio.sleep(REQUEST_GAP)
 
 
 async def _commit(session, stats: Counter) -> None:

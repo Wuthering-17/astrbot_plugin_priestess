@@ -33,6 +33,7 @@ from astrbot.api.event import AstrMessageEvent
 from . import ef_theme
 from .endfield_guide.echoes import speed_ranking
 from .guide import CN
+from ..notifications import notification_enabled
 
 WIDTH = 1000
 SEND_GAP = 6.0
@@ -540,6 +541,8 @@ async def _send_report(bot: _OneBotClient, group_id: int, image: bytes, at_all: 
 
 async def send_all(plugin, bot: _OneBotClient, admin_file: Path, config_file: Path, at_all: bool = False) -> dict[str, int]:
     stats = {"ok": 0, "fail": 0, "at_all": 0}
+    if not notification_enabled(plugin, "weekly_report"):
+        return stats
     wanted = _report_groups(config_file)
     for group in await bot.get_group_list():
         group_id = int(group["group_id"])

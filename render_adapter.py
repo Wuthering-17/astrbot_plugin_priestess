@@ -245,6 +245,25 @@ async def _html_to_pic(
     device_scale_factor: float = 1.5,
     base_url: str | None = None,
 ) -> str:
+    from playwright.async_api import TimeoutError as PageTimeout
+
+    for attempt in range(2):
+        try:
+            return await _html_to_pic_once(html_content, width, height, full_page, device_scale_factor, base_url)
+        except PageTimeout as error:
+            if attempt:
+                raise RuntimeError("生成图片超时（图片素材加载太慢），请稍后再试") from error
+            logger.info("[Priestess] Picture render timed out, trying once more")
+
+
+async def _html_to_pic_once(
+    html_content: str,
+    width: int = 706,
+    height: int = 1,
+    full_page: bool = True,
+    device_scale_factor: float = 1.5,
+    base_url: str | None = None,
+) -> str:
     """使用 Playwright 将 HTML 渲染为图片，返回图片路径。
 
     作为 AstrBot html_render 的 fallback，当 star.html_render 不可用时调用。
@@ -271,37 +290,39 @@ async def _html_to_pic(
 
     async with async_playwright() as p:
         browser = await launch_browser(p)
-        # 将 base_url 传给 new_page，使模板中的相对路径资源（CSS、图片）能正确解析
-        page = await browser.new_page(
-            viewport={"width": width, "height": max(height, 1)},
-            device_scale_factor=device_scale_factor,
-            base_url=base_url or f"file://{TEMPLATES_DIR}",
-        )
-        await page.set_content(
-            html_content,
-            wait_until="networkidle",
-        )
-        # 等待布局稳定，确保所有 CSS 计算完成
-        await page.wait_for_timeout(300)
-        # 获取内容实际尺寸，避免 full_page 截取到多余空白
-        dimensions = await page.evaluate("""() => {
-            const body = document.body;
-            const html = document.documentElement;
-            return {
-                width: Math.max(body.scrollWidth, body.offsetWidth, html.clientWidth, html.scrollWidth, html.offsetWidth),
-                height: Math.max(body.scrollHeight, body.offsetHeight, html.clientHeight, html.scrollHeight, html.offsetHeight)
-            };
-        }""")
-        # 设置 viewport 匹配内容尺寸，确保截图完整
-        await page.set_viewport_size({
-            "width": max(dimensions["width"], width),
-            "height": max(dimensions["height"], 1)
-        })
-        await page.screenshot(
-            path=str(file_name),
-            full_page=True,
-        )
-        await browser.close()
+        try:
+            # 将 base_url 传给 new_page，使模板中的相对路径资源（CSS、图片）能正确解析
+            page = await browser.new_page(
+                viewport={"width": width, "height": max(height, 1)},
+                device_scale_factor=device_scale_factor,
+                base_url=base_url or f"file://{TEMPLATES_DIR}",
+            )
+            await page.set_content(
+                html_content,
+                wait_until="networkidle",
+            )
+            # 等待布局稳定，确保所有 CSS 计算完成
+            await page.wait_for_timeout(300)
+            # 获取内容实际尺寸，避免 full_page 截取到多余空白
+            dimensions = await page.evaluate("""() => {
+                const body = document.body;
+                const html = document.documentElement;
+                return {
+                    width: Math.max(body.scrollWidth, body.offsetWidth, html.clientWidth, html.scrollWidth, html.offsetWidth),
+                    height: Math.max(body.scrollHeight, body.offsetHeight, html.clientHeight, html.scrollHeight, html.offsetHeight)
+                };
+            }""")
+            # 设置 viewport 匹配内容尺寸，确保截图完整
+            await page.set_viewport_size({
+                "width": max(dimensions["width"], width),
+                "height": max(dimensions["height"], 1)
+            })
+            await page.screenshot(
+                path=str(file_name),
+                full_page=True,
+            )
+        finally:
+            await browser.close()
 
     return str(file_name)
 

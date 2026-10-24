@@ -21,6 +21,7 @@ from ..db import (
 )
 from ..schemas import CRED
 from ..utils import call_api_with_refresh
+from ..notifications import notification_enabled
 
 GAMES = {"arknights": "明日方舟", "endfield": "终末地"}
 
@@ -151,6 +152,8 @@ class SanityReminder:
                     changed = True
                     continue
                 for game, state in subscription.get("games", {}).items():
+                    if not notification_enabled(self.plugin, f"sanity_{game}"):
+                        continue
                     try:
                         current, maximum, full_ts = await self._fetch(user, game)
                     except Exception as error:

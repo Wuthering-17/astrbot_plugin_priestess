@@ -1,4 +1,105 @@
 {
+    "notify_all": {
+        "description": "主动提醒总开关",
+        "type": "bool",
+        "default": true,
+        "hint": "关闭后停止所有主动群消息和私聊提醒；后台签到、数据更新以及手动查询回复继续正常运行。"
+    },
+    "notify_wiki_update": {
+        "description": "资料库：AKEData 数据更新群通知",
+        "type": "bool",
+        "default": true
+    },
+    "notify_activity_arknights": {
+        "description": "明日方舟：活动开启群通知",
+        "type": "bool",
+        "default": true,
+        "hint": "关闭期间发生的活动不在重新开启后补发。"
+    },
+    "activity_arknights_groups": {
+        "description": "明日方舟：活动开启图片发送群",
+        "type": "string",
+        "default": "",
+        "hint": "填写接收方舟活动开启图片的 QQ 群号，多个群用逗号分隔；留空不自动发送。还需开启方舟活动通知及主动提醒总开关。"
+    },
+    "notify_activity_endfield": {
+        "description": "终末地：活动开启群通知",
+        "type": "bool",
+        "default": true,
+        "hint": "关闭期间发生的活动不在重新开启后补发。"
+    },
+    "activity_endfield_groups": {
+        "description": "终末地：活动开启图片发送群",
+        "type": "string",
+        "default": "",
+        "hint": "填写接收终末地活动开启图片的 QQ 群号，多个群用逗号分隔；留空不自动发送。还需开启终末地活动通知及主动提醒总开关。"
+    },
+    "notify_weekly_report": {
+        "description": "群周报：定时发送",
+        "type": "bool",
+        "default": true,
+        "hint": "关闭不影响手动发送 /周报预览。"
+    },
+    "notify_sanity_arknights": {
+        "description": "明日方舟：理智回满群提醒",
+        "type": "bool",
+        "default": true,
+        "hint": "全局开关；开启后仍需本人通过 /理智提醒 开 订阅。"
+    },
+    "notify_sanity_endfield": {
+        "description": "终末地：体力回满群提醒",
+        "type": "bool",
+        "default": true,
+        "hint": "全局开关；开启后仍需本人通过 /理智提醒 开 订阅。"
+    },
+    "notify_stamina_arknights": {
+        "description": "明日方舟：90% 理智预警",
+        "type": "bool",
+        "default": true,
+        "hint": "旧版预警发送到账号最近保存的消息来源，与回满订阅提醒独立。"
+    },
+    "notify_stamina_endfield": {
+        "description": "终末地：90% 体力预警",
+        "type": "bool",
+        "default": true,
+        "hint": "旧版预警发送到账号最近保存的消息来源，与回满订阅提醒独立。"
+    },
+    "notify_daily_sign_group": {
+        "description": "自动签到：绑定群结果汇总",
+        "type": "bool",
+        "default": true,
+        "hint": "关闭不影响自动签到，也不影响手动 /全群签到 的回复。"
+    },
+    "notify_sign_failure_private": {
+        "description": "自动签到：账号或游戏签到失败私聊",
+        "type": "bool",
+        "default": true,
+        "hint": "仍需填写下方私聊接收 QQ；留空不发送。"
+    },
+    "notify_clock_failure_private": {
+        "description": "自动签到：网络校时失败私聊",
+        "type": "bool",
+        "default": true,
+        "hint": "仍需填写下方私聊接收 QQ；留空不发送。"
+    },
+    "notify_sign_job_failure_private": {
+        "description": "自动签到：任务异常中断私聊",
+        "type": "bool",
+        "default": true,
+        "hint": "仍需填写下方私聊接收 QQ；留空不发送。"
+    },
+    "notify_health_private": {
+        "description": "账号体检：定期异常结果私聊管理员",
+        "type": "bool",
+        "default": true,
+        "hint": "使用 AstrBot 管理员 ID 列表，不使用签到失败接收 QQ 配置。关闭不停止体检。"
+    },
+    "sign_failure_notify_qq": {
+        "description": "自动签到失败私聊接收 QQ",
+        "type": "string",
+        "default": "",
+        "hint": "由安装者自行填写；留空不发送。多个 QQ 用逗号分隔。同一账号同一游戏每天首次失败提醒一次，重试不重复提醒；机器人需能向接收人发送私聊。"
+    },
     "skland_github_proxy_url": {
         "description": "GitHub 代理 URL，用于下载游戏资源",
         "type": "string",

@@ -1,66 +1,65 @@
-# Priestess-bot → AstrBot port
+# Priestess-bot → AstrBot 适配说明
 
-Source: `Billtranscend/Priestess-bot`, commit `59e2be8ee0006a031a903cce1d7b2d72138ba8f5`.
+## 来源与版本
 
-This branch targets a native AstrBot plugin for an existing QQ deployment. The
-original NoneBot application remains the behavior reference. A second NoneBot
-service is not considered completion of this port.
+- 原作者：**Billtranscend**；原仓库：https://github.com/Billtranscend/Priestess-bot 。
+- 初始迁移基线：`59e2be8ee0006a031a903cce1d7b2d72138ba8f5`。
+- 本次同步参考：`10419ecb8ea970326dcff5be3513c5ffb4edffda`（2026-10-24）。
+- 发布版本：v0.1.18，接续 GitHub v0.1.17，合并此前未发布的本地试用改动。
+- Wuthering-17 负责 AstrBot 接口适配、维护及分发；原功能及素材保留原作者署名。
 
-## Compatibility boundary
+本插件运行在现有 AstrBot 中，不需要第二个 NoneBot 服务。重复 NoneBot 入口、部署脚本与运行模块已移除；历史仍在 Git 中。
+兼容环境为 Python 3.12、AstrBot 4.28.2、NapCat / OneBot v11。QQ 官方机器人未验证。
 
-- Original entry point: `bot.py`, NoneBot 2.5.0, OneBot v11.
-- Upstream feature packages: `nonebot-plugin-skland==0.7.2` and
-  `nonebot-plugin-pErithacus==1.4.4`. Their commands, account models, and
-  persistence cannot be loaded as AstrBot plugins directly.
-- Local code: `plugins/` contains commands, scheduled jobs, database access,
-  rendering, and OneBot-specific group actions. Pure data processing code can
-  be reused after moving it behind a framework-neutral interface.
-- AstrBot entry point: `main.py` with a `Star` subclass and `metadata.yaml`.
-  Persistent files belong in AstrBot's plugin data directory.
+## 功能状态与边界
 
-## Port status
-
-| Area | AstrBot port status | Remaining work |
+| 功能 | 已适配 | 仍有的差异 |
 | --- | --- | --- |
-| Account binding and role selection | QR/token binding, role sync, role listing and default switching, `-r` temporary role selection are wired in `main.py`. The AstrBot database still stores one Skland account per QQ ID. | Migrate the source account-owner model so one QQ ID can manage multiple Skland accounts; port add-account and multi-account unbind flows. |
-| Arknights and Endfield sign-in | Manual sign-in for both games; scheduled daily sign-in is wired for 00:15 and 00:20 China time. | Verify exact API behavior on NapCat; handle missed scheduler runs and multi-account credentials. |
-| Cards, roster, gacha history | Cards, roster, gacha history (including the Endfield rerun pool), recruitment, roguelike and daily Endfield gacha synchronization are present. Heybox import/undo rebuilds only negative-position rows, verifies the game UID and retains a protected snapshot for reconciliation. | Check Playwright/Chromium availability on the deployed AstrBot host. |
-| Wiki and Endfield data | Operator, weapon and equipment lookup, AKEData sync, version notifications and usage/team summaries are wired. | Check renderer availability and group notification behavior on the deployed AstrBot host. |
-| High-difficulty guide | Guide, enemy attributes, speed boards, collection and opt-out commands are wired. | Runtime-check source data refresh and QQ image delivery. |
-| Calendar and scheduled notices | Both game calendars, activity notices and admin preview are wired in Beijing time. | Runtime-check the OneBot broadcast APIs and delivery windows. |
-| Sanity reminder | `/理智`, group subscriptions and a 10-minute background reminder loop are wired. The earlier 90% stamina warning loop remains available too. | Verify mentions, persistence and token refresh through the deployed adapter. |
-| Weekly report | Scheduled Sunday 19:00 report, daily 06:00 admin refresh, preview command, group allowlist at `data/plugin_data/astrbot_plugin_priestess/weekly_report/config.json`, and @all disabled to match the current source setting. | Check report image rendering and NapCat essence/quota API responses on the deployed host. |
-| Account health | `/森空岛体检` checks bindings and roles; only `/森空岛体检 清理` removes invalid data after writing a 0600 backup. Monday 04:00 job checks and notifies AstrBot admins without deleting data. Missing role defaults are repaired at startup. | The source's unattended scheduled deletion is disabled pending explicit authorization. Existing single-account schema remains; migrated health checks cannot inspect multiple Skland accounts per QQ ID. |
-| Keyword dictionary replies | Not ported. The NoneBot repo depends on external `nonebot-plugin-pErithacus`; its rule data and management implementation are not included in this repository. | Port or replace that external plugin and plan a rule-data migration. |
-| QQ group behavior | OneBot invitation approval and membership change handling are wired. Ordinary image replies are sent as separate AstrBot messages. | Bison subscription queue integration, text-mention command tolerance, and source-style merged-forward labeling are not ported. |
-| Group gacha leaderboards | Text boards for the top/bottom Endfield character and weapon pull averages, group opt-out, and personal totals are wired. | Compare the ranking calculation with the source on real records; the AstrBot model currently supports one account per QQ ID. |
+| 账号 | 扫码／手动凭据绑定、角色列表、刷新与默认切换、临时 `-r` 选择 | 每 QQ 一个森空岛账号；未迁移多账号、原版账号唯一性保护和解绑二次确认；解绑不应被理解为完整擦除所有关联历史 |
+| 签到 | 00:15 双游戏同批、启动静默补签、失败重试、绑定群通知、可配置失败私聊、内部校时 | 不承诺网络／失效凭据问题必然恢复；插件不修改 OS 时间 |
+| 开盒 | 方舟角色卡、终末地全干员技能武器装备、真实 @群友查询 | 不等于原版独立“方舟干员一览”指令；字段完整度依赖上游数据 |
+| 抽卡 | 双游戏个人记录、终末地每日同步、小黑盒导入、欧非榜、指定池全群对比、多页合并转发 | 不含原版绑定即启动的持久化同步队列；没有通用全群一键刷新；同步失败不具备原版队列级恢复 |
+| 资料库 | AKEData 同步、检索、卡片、群友配装与组队、数据更新通知 | 未迁移原版资料缺失／重建失败专用管理员私聊；样本有门槛 |
+| 高难 | 目录、完整攻略图、敌人、竞速图、通关配队、退出统计；5 人并发与每 50 人保存 | 失败接口保留旧记录，与原版删除失败成员的策略不同；出场率仍为当前群文字统计，非原版全局图片榜 |
+| 定时采集 | 03:00 配装；05:30、17:30 战绩；缺失或过期配装时补采 | 数据库模型和调度实现使用 AstrBot，不直接导入 NoneBot 调度器 |
+| 活动 | 两游戏日历、开启图片、独立目标群、总／分类开关、部分群失败重试 | 默认目标群留空；首次启动和关闭期间的活动不补发 |
+| 提醒／周报 | 回满订阅、90% 预警、周报与预览、通知分类开关 | 90% 预警使用最近消息来源；与回满订阅独立 |
+| 体检 | 默认角色修复、每周检查报告、管理员手动备份清理 | 定期任务不自动删除绑定 |
+| QQ 群 | 入群邀请处理、群成员读取与图片转发 | 未迁移 Bison 新群订阅／退群清理、原版所有合并转发标签与附加 @ 细节 |
+| 其他 | 公开招募、集成战略查询、日常看板 | pErithacus 词库与管理未迁移；原 NoneBot 数据库导入未实现 |
 
-## Data compatibility and verification
+## 本次上游同步方式
 
-The old NoneBot database uses `nonebot-plugin-user` owner records and can store
-multiple Skland accounts for one QQ ID. The AstrBot database currently stores a
-single account under the QQ ID. Existing account data therefore needs an explicit
-migration before it can be reused; copying the SQLite file is not sufficient.
+沿用原作者 5 个工作协程、每 50 人保存和配装独立夜间采集的设计。
+每个工作协程使用独立 SQLAlchemy AsyncSession，逐账号提交凭据刷新，避免共享会话与长时间写锁。
+异常时先取消并等待其他工作协程，再保存已完成记录；保留此前的双接口独立更新和失败快照。
+本地 Playwright 渲染超时重试一次，每次尝试都关闭浏览器；第二次超时转换为可读提示，由现有 AstrBot 命令回复。
+没有引入 NoneBot Matcher、消息反应或额外运行依赖。
 
-The port was prepared against AstrBot 4.28.2 and the OneBot v11 adapter source.
-The v0.1.4 archive was extracted into an isolated workspace and checked using the
-local AstrBot instance's Python 3.12 environment and AstrBot 4.28.2 source. Checks
-passed for AstrBot archive validation, namespaced entry import, plugin object
-construction, empty database initialization, all packaged Python source files,
-and an actual headless Edge launch with a fresh temporary browser context.
-Browser fallback and Heybox fetch failure handling were also checked with
-controlled responses. Whitespace checks passed.
+## 数据与迁移
 
-No end-to-end validation of live Skland sign-in, real Heybox account records,
-or the complete QQ group feature set has been completed.
+数据位于 `data/plugin_data/astrbot_plugin_priestess/`，不会打入发行包。
+旧 AstrBot 连字符目录整体迁移；Windows 占用时继续旧路径，新旧都有数据时阻止覆盖。
+NoneBot 原库使用不同账号所有权模型，不能直接复制 SQLite 文件；此适配版尚无导入工具。
+升级前停机备份，勿用源码仓库或 ZIP 代替运行数据备份。
 
-## Attribution
+## 验证
 
-Original project: **Billtranscend/Priestess-bot**, with original copyright and MIT
-license retained. AstrBot Skland implementation: **SciNancy/astrbot_plugin_sklands**.
-The publishing repository's maintainer provides the AstrBot interface adaptation
-and compatibility maintenance. See `THIRD_PARTY_NOTICES.md` for all sources.
+- AstrBot 4.28.2 安装包识别、命名空间入口导入、对象构造、SQLite 初始化和全包 Python 编译。
+- 历次受控回归覆盖绑定群隔离、@群友开盒、攻略、通知开关、校时、失败私聊与活动指定群。
+- 本次 `tests/test_upstream_sync.py` 覆盖并发上限／独立会话、50 人部分保存、接口失败保留与配装独立、工作协程异常取消、调度与渲染重试。
+- Windows 无头 Edge 和实际图片输出已验证。真实账号全部接口及 QQ 发送链路尚未全部端到端验证。
 
-## v0.1.16 release cleanup
+在安装了 AstrBot 与本插件依赖的 Python 3.12 环境运行：
 
-The duplicate NoneBot runtime and standalone deployment files have been removed. Required shared theme/font resources now live under `priestess_features/ef_theme`, and the help image under `resources/help`. Runtime modules use AstrBot logging and default TLS verification. Old AstrBot data directories are migrated without overwriting existing canonical data.
+```bash
+python tests/test_upstream_sync.py
+```
+
+若仅有 AstrBot 源码，可设置环境变量 `ASTRBOT_SOURCE` 指向该源码目录后运行。
+测试只创建临时数据库，不使用真实凭据、不会发 QQ 消息。
+
+## 许可
+
+保留原作者 [LICENSE](LICENSE) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+用户使用说明以 [README.md](README.md) 为准。

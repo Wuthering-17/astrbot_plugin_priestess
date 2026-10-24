@@ -22,6 +22,7 @@ from ..db import Character, GachaRecord, SkUser, StaminaAlert, get_session
 from ..exception import RequestException
 from ..schemas import CRED
 from .guide import CN
+from ..notifications import notification_enabled
 
 BASE = "https://zonai.skland.com/api/v1"
 BINDING_URL = f"{BASE}/game/player/binding"
@@ -343,6 +344,8 @@ class AccountHealth:
         return "\n".join(lines)
 
     async def _notify_admins(self, message: str) -> None:
+        if not notification_enabled(self.plugin, "health_private"):
+            return
         admins = self.plugin.context.get_config().get("admins_id", [])
         platform = next(
             (item for item in self.plugin.context.platform_manager.get_insts() if item.meta().name == "aiocqhttp"), None

@@ -12,6 +12,7 @@ import httpx
 from pydantic import TypeAdapter
 
 from ..db import Character
+from ..network_clock import network_clock
 
 
 from ..exception import LoginException, RequestException, UnauthorizedException
@@ -100,7 +101,9 @@ class SklandAPI:
             query_body: POST 请求体。
             use_did: 是否获取并使用设备 ID 参与签名计算。
         """
-        timestamp = int(datetime.now().timestamp()) - 1
+        if not await network_clock.ensure_synced():
+            raise RequestException("网络校时尚未成功，请稍后重试；未使用可能不准确的电脑时间发送签名请求。")
+        timestamp = int(network_clock.timestamp()) - 1
         header_for_sign = {**cls._header_for_sign}
         if use_did:
             from .dId import get_dId

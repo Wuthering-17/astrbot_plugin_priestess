@@ -16,6 +16,7 @@ from astrbot.api import logger
 from .endfield_guide import bili as bili_module, echoes, stages
 from .endfield_guide.builds import BuildStore, MIN_SAMPLE
 from .endfield_guide.echoes import EchoStore
+from .endfield_guide.guide_render import render_guide
 from .endfield_wiki import data as wiki_data
 from .endfield_wiki.lookup import normalize, to_pinyin
 from . import ef_theme
@@ -420,20 +421,13 @@ class EndfieldGuide:
             html = stages.enemies_html(ef_theme, "Arknights: Endfield · Guide", title, chips, [group], actual_difficulty, icons, version)
             followup = ""
             if command == "攻略":
-                pool, names, clear_data, operators, group_id = await self._member_data(event)
-                group_id = event.get_group_id() if event is not None else ""
+                pool, names, clear_data, operators, group_id = await self._member_data(event, strict=True)
                 stats = echoes.team_stats(clear_data, pool, f"{group['name']}|{actual_difficulty}")
-                if stats["teams"]:
-                    rows = []
-                    for rank, team in enumerate(stats["teams"], 1):
-                        names = [operators.get(char["id"], {}).get("name", char["id"]) for char in team["chars"]]
-                        rows.append(f"{rank}. {' / '.join(names)}：{team['count']} 人使用")
-                    target = "本群" if group_id else "你的"
-                    followup = f"{target}已记录 {stats['clears']} 人通关 {actual_difficulty}，常见阵容：\n" + "\n".join(rows)
                 videos, stale = await self.bili.videos(group["name"], ("残酷", "增辉") if actual_difficulty == "残酷" else ("苦难",) if actual_difficulty == "苦难" else ())
+                target_text = clear_data.get("targets", {}).get(f"{group['name']}|{actual_difficulty}", "")
+                html = await render_guide(self, endgame, group, stage, actual_difficulty, stats, target_text, videos, stale, bool(group_id))
                 if videos:
                     note = "（B站暂时无法访问，显示缓存结果）\n" if stale else ""
-                    video_text = "推荐视频（点击链接观看）\n" + note + "\n".join(f"{i}. {video.title[:40]}\nhttps://www.bilibili.com/video/{video.bvid}" for i, video in enumerate(videos, 1))
-                    followup = f"{followup}\n\n{video_text}" if followup else video_text
+                    followup = "推荐视频（点击链接观看）\n" + note + "\n".join(f"{i}. {video.title[:40]}\nhttps://www.bilibili.com/video/{video.bvid}" for i, video in enumerate(videos, 1))
             return "image", await self._render(html), followup
         return "miss", "", ""

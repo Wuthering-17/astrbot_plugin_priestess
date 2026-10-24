@@ -16,6 +16,7 @@ from .endfield_wiki import changes, data, render
 from .endfield_wiki.lookup import Resolver
 from .endfield_guide.echoes import partners as team_partners
 from ..render_adapter import _try_star_html_render
+from ..notifications import notification_enabled
 
 
 
@@ -115,6 +116,8 @@ class EndfieldWiki:
 
     async def _notify_groups(self, message: str) -> None:
         """Send version notices through the configured OneBot v11 adapter."""
+        if not notification_enabled(self.plugin, "wiki_update"):
+            return
         sent = 0
         for platform in self.plugin.context.platform_manager.platform_insts:
             meta = platform.meta()

@@ -36,6 +36,7 @@ from astrbot.api import logger
 from ...config import GACHA_DATA_PATH
 from ..endfield_wiki import data as wiki_data
 from ...render_adapter import _try_star_html_render
+from ...notifications import notification_enabled
 from ..guide import CN
 
 from . import arknights, themes
@@ -306,9 +307,10 @@ def notice_html(game: Game, opened: list[dict], now: datetime, art: dict[str, st
         else:
             end = '<div class="end"><span>截止</span><b>常驻开放</b></div>'
         src = art.get(a["key"], "")
+        duration = f' · 总持续 {_span(a["end"] - a["start"])}' if a["end"] else " · 常驻开放"
         body += (
             f'<div class="hero{" pic" if src else ""}">{_art_box(src)}<div class="hk"><i>已开启</i>{theme.tag(a["kind"])}</div><h2>{escape(a["name"])}</h2>{end}'
-            f'<div class="from">{_moment(a["start"])} 开启</div></div>'
+            f'<div class="from">{_moment(a["start"])} 开启{duration}</div></div>'
         )
     others = [a for a in open_now(data["activities"], now) if a["key"] not in keys]
     if others:
@@ -439,44 +441,59 @@ def _quiet(now: datetime) -> bool:
     return QUIET_HOURS is not None and QUIET_HOURS[0] <= now.hour < QUIET_HOURS[1]
 
 
-async def _broadcast(image_path: str) -> dict[str, int]:
-    """The picture to every group, without @全体成员."""
+def notification_groups(game_key: str) -> set[str]:
+    configured = getattr(_calendar_plugin, "plugin_config", {}).get(f"activity_{game_key}_groups", "")
+    if not isinstance(configured, str):
+        return set()
+    return {group for group in re.split(r"[\s,，;；]+", configured.strip()) if re.fullmatch(r"[1-9]\d{0,11}", group)}
+
+
+async def _broadcast(image_path: str, game_key: str, groups: set[str] | None = None) -> dict[str, int]:
+    """Send only to explicitly selected groups, once per group even with multiple adapters."""
     stats = {"ok": 0, "fail": 0}
+    if not notification_enabled(_calendar_plugin, f"activity_{game_key}"):
+        return stats
+    pending = notification_groups(game_key)
+    if groups is not None:
+        pending &= groups
+    if not pending:
+        return stats
     try:
         image = base64.b64encode(Path(image_path).read_bytes()).decode("ascii")
     except OSError:
         logger.warning("Activity notice image is unavailable")
         return stats
-    for platform in _calendar_plugin.context.platform_manager.platform_insts:
+    for platform in _calendar_plugin.context.platform_manager.get_insts():
         meta = platform.meta()
-        bot = getattr(platform, "bot", None)
-        if not bot or "aiocqhttp" not in (getattr(meta, "id", "") + getattr(meta, "name", "")).lower():
+        if meta.name != "aiocqhttp" or not hasattr(platform, "get_client"):
             continue
         try:
-            groups = await bot.call_action("get_group_list")
+            bot = platform.get_client()
         except Exception:
-            logger.warning("Could not list QQ groups for activity notice", exc_info=True)
             continue
-        for group in groups or []:
+        for group_id in sorted(pending):
             for attempt in range(2):
                 current = bot
                 try:
                     if current is None:
                         raise RuntimeError("bot offline")
-                    await current.call_action(
+                    response = await current.call_action(
                         "send_group_msg",
-                        group_id=int(group["group_id"]),
+                        group_id=int(group_id),
                         message=f"[CQ:image,file=base64://{image}]",
                     )
+                    if isinstance(response, dict) and (response.get("status") == "failed" or response.get("retcode", 0) != 0):
+                        raise RuntimeError("OneBot rejected activity notification")
                     stats["ok"] += 1
+                    pending.remove(group_id)
                     break
                 except Exception as e:
                     if attempt:
-                        stats["fail"] += 1
                         logger.warning(f"Activity notice failed for one group: {type(e).__name__}")
                     else:
                         await asyncio.sleep(SEND_GAP)
             await asyncio.sleep(SEND_GAP)
+    stats["fail"] = len(pending)
     return stats
 
 
@@ -498,12 +515,36 @@ async def _check_game(game: Game, state: dict[str, list[str]], now: datetime) ->
         announced |= stale
         state[game.key] = sorted(announced)
         _save_state(state)
+    selected = notification_groups(game.key)
+    if not notification_enabled(_calendar_plugin, f"activity_{game.key}") or not selected:
+        # Disabled events are consumed so enabling later cannot flood old notices.
+        if fresh:
+            state[game.key] = sorted(announced | {key for a in fresh for key in a["keys"]})
+            _save_state(state)
+        return
     if not fresh or _quiet(now):
         return
     started = time.time()
-    stats = await _broadcast(await notice_picture(game, fresh, now))
-    if stats["ok"]:  # nothing delivered (bot offline): try again at the next check
-        state[game.key] = sorted(announced | {key for a in fresh for key in a["keys"]})
+    stats = {"ok": 0, "fail": 0}
+    images = {}
+    for group_id in sorted(selected):
+        delivery_key = f"{game.key}:group:{group_id}"
+        delivered = set(state.get(delivery_key, []))
+        pending = [a for a in fresh if not a["keys"] & delivered]
+        if not pending:
+            continue
+        batch = tuple(a["key"] for a in pending)
+        if batch not in images:
+            images[batch] = await notice_picture(game, pending, now)
+        outcome = await _broadcast(images[batch], game.key, {group_id})
+        stats["ok"] += outcome["ok"]
+        stats["fail"] += outcome["fail"]
+        if outcome["ok"]:
+            state[delivery_key] = sorted(delivered | {key for a in pending for key in a["keys"]})
+            _save_state(state)
+    completed = [a for a in fresh if all(a["keys"] & set(state.get(f"{game.key}:group:{gid}", [])) for gid in selected)]
+    if completed:
+        state[game.key] = sorted(announced | {key for a in completed for key in a["keys"]})
         _save_state(state)
     logger.info(f"Activity notice for {len(fresh)} {game.key} activities sent in {time.time() - started:.0f}s: {stats}")
 

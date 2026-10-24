@@ -29,6 +29,7 @@ class SkUser(Base):
     cred_token: Mapped[str] = mapped_column(Text)
     # 统一消息来源（用于定时任务推送消息）
     umo: Mapped[str] = mapped_column(Text, nullable=True)
+    binding_group: Mapped[str] = mapped_column(Text, nullable=True)
 
 
 class Character(Base):
@@ -136,6 +137,12 @@ async def init_db(db_path: str = None, force: bool = False):
             if not result.fetchone():
                 await conn.execute(text("ALTER TABLE skland_user ADD COLUMN umo TEXT"))
                 logger.info("[Skland] 数据库迁移：skland_user 添加 umo 列")
+            result = await conn.execute(
+                text("SELECT name FROM pragma_table_info('skland_user') WHERE name = 'binding_group'")
+            )
+            if not result.fetchone():
+                await conn.execute(text("ALTER TABLE skland_user ADD COLUMN binding_group TEXT"))
+                logger.info("[Skland] 数据库迁移：添加独立的绑定群记录，旧账号需本人指定通知群")
         _session_maker = async_sessionmaker(_engine, expire_on_commit=False)
         logger.info(f"[Skland] 数据库已初始化: {path}")
 

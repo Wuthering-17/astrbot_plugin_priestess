@@ -15,6 +15,7 @@ third-party works. Each remains under its own license.
 - Source: https://github.com/Billtranscend/Priestess-bot
 - Original author: Billtranscend and upstream contributors.
 - Adaptation base: commit `59e2be8ee0006a031a903cce1d7b2d72138ba8f5`.
+- Collection and rendering-timeout improvements synchronized from `10419ecb8ea970326dcff5be3513c5ffb4edffda` (2026-10-24); adapted for AstrBot in v0.1.18.
 - Used in: AstrBot adaptations under `priestess_features/` and the derived
   help image in `resources/help/`, with the upstream Git history retained.
 - The duplicate NoneBot runtime tree was removed from the AstrBot release in
