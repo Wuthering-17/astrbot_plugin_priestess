@@ -3,6 +3,16 @@
 This repository contains material derived from, or distributed together with, the following
 third-party works. Each remains under its own license.
 
+## Plugin icon: Arknights official Priestess CG
+
+- File: `logo.png`, used as the AstrBot plugin card / marketplace icon.
+- Original artwork: Arknights official story CG `avg_8_9` (Priestess), from Chapter 8, M8-8 ending.
+- Copyright: HYPERGRYPH / the original rights holders. This artwork is not covered by this repository's MIT license.
+- Source index: https://prts.wiki/w/M8-8_苏醒，浮出梦乡/END
+- Original image: https://media.prts.wiki/2/20/Avg_avg_8_9.png
+- Adaptation: square crop `(470, 0, 1110, 640)` from the 1280 × 720 original, resized to 512 × 512. No AI repainting, recoloring, text or invented elements.
+- The artwork identifies this unofficial fan tool; it does not imply endorsement by HYPERGRYPH. Rights remain with the original copyright holders.
+
 ## Group sign-in presentation reference
 
 - Reference: https://github.com/Azincc/astrbot_plugin_skland (`main.py`, `skd` group output).

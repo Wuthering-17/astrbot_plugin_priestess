@@ -1,5 +1,7 @@
 # Priestess Bot
 
+<img src="logo.png" width="96" height="96" alt="普瑞赛斯官方剧情 CG 图标" align="right">
+
 面向《明日方舟》与《明日方舟：终末地》玩家群的 AstrBot QQ 插件，接入现有 NapCat / OneBot v11 机器人。
 An AstrBot adaptation of Priestess-bot for Arknights / Arknights: Endfield communities.
 
