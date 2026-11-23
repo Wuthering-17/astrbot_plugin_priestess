@@ -20,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
 from ...api import SklandAPI, SklandLoginAPI
-from ...db import Character, SkUser, get_default_ef_character, get_session
+from ...db import Character, SkUser, get_default_ef_character, get_session, get_user_by_platform
 from ...exception import LoginException
 from ...schemas import CRED
 
@@ -33,6 +33,8 @@ REQUEST_GAP = 2.0  # between each worker's requests
 WORKERS = 5
 SAVE_EVERY = 50
 ECHO_SCHEMA = 2  # 2: keep the fastest clear when a stage recurs across seasons (1 kept the latest)
+REFRESH_COOLDOWN = 300
+REFRESH_RETRY_DELAY = 60
 
 
 class RecordError(RuntimeError):
@@ -45,6 +47,7 @@ class EchoStore:
         self.optout_file = optout_file
         self.layout_file = layout_file or data_file.with_name("layout.json")
         self.lock = asyncio.Lock()
+        self._refresh_until: dict[str, float] = {}
 
     def layout(self) -> dict:
         """What Skland shows every player alike: series and stages in the game's order, with their pictures."""
@@ -68,6 +71,8 @@ class EchoStore:
             return {"members": {}, "targets": {}}
 
     def _save(self, data: dict) -> None:
+        for qq in self.optout():
+            data["members"].pop(qq, None)
         tmp = self.data_file.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False), "utf-8")
         tmp.chmod(0o600)
@@ -87,9 +92,46 @@ class EchoStore:
         tmp.chmod(0o600)
         tmp.replace(self.optout_file)
         if out:
+            self._refresh_until.pop(qq, None)
             data = self.load()
             if data["members"].pop(qq, None) is not None:
                 self._save(data)
+
+    async def refresh_member(self, qq: str) -> str:
+        """Update the sender's default Endfield role using the same writer as scheduled collection."""
+        if qq in self.optout():
+            return "你已退出攻略统计。发送 /攻略统计 加入 后可更新。"
+        now = time.monotonic()
+        self._refresh_until = {user: until for user, until in self._refresh_until.items() if until > now}
+        if qq in self._refresh_until:
+            wait = int(self._refresh_until[qq] - now) + 1
+            return f"请 {wait} 秒后再更新竞速记录。"
+        if self.lock.locked():
+            return "正在采集攻略数据，请稍后再试。"
+
+        async with self.lock:
+            async with await get_session() as session:
+                user = await get_user_by_platform(session, qq)
+                if user is None:
+                    return "请先发送 /skl绑定 绑定森空岛账号。"
+                data, stats = self.load(), Counter()
+                await self._member(session, user.id, qq, data, stats, self.optout(), None, {})
+            if qq in self.optout() or stats["opted_out"]:
+                return "你已退出攻略统计。发送 /攻略统计 加入 后可更新。"
+            if stats["ok"] or stats["dropped"]:
+                data["schema"] = ECHO_SCHEMA
+                self._save(data)
+            if not stats["eligible"]:
+                return "未找到已绑定的终末地角色。"
+            updated = [name for source, name in (("echoes", "战争回响"), ("monument", "影拓丰碑")) if stats[source]]
+            delay = REFRESH_COOLDOWN if len(updated) == 2 else REFRESH_RETRY_DELAY
+            self._refresh_until[qq] = time.monotonic() + delay
+            if not updated:
+                return "两项战绩均读取失败，榜单保留此前的记录。请 1 分钟后重试。"
+            summary = "、".join(updated) + "战绩已刷新。"
+            if len(updated) == 1:
+                return summary + "另一项读取失败，榜单保留该项此前的记录。请 1 分钟后重试。"
+            return summary + "可发送 /竞速榜 查看。"
 
     async def collect(self, builds: BuildStore | None = None, *, builds_only: bool = False) -> dict[str, int]:
         """Fetch every bound, non-opted-out member once; returns counters for logging.

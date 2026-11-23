@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from astrbot.api import logger
+
 FONT_DIR = Path(__file__).with_name("fonts")
 
 YELLOW = "#ffe100"
@@ -138,13 +140,22 @@ async def render_page(html: str, width: int, *, height: int = 800, scale: float 
     import asyncio
 
     from ...render_adapter import _html_to_pic, _inline_resources, _inline_remote_images
-    from ...config import TEMPLATES_DIR
+    from ...config import CACHE_DIR, TEMPLATES_DIR
 
     html = _inline_resources(html, TEMPLATES_DIR)
     html = await _inline_remote_images(html)
     image_path = await _html_to_pic(html, width=width, height=height, device_scale_factor=scale, base_url=template_path)
     image = await asyncio.to_thread(Path(image_path).read_bytes)
-    return await asyncio.to_thread(to_webp, image, quality)
+    result = await asyncio.to_thread(to_webp, image, quality)
+    # Only this call's renderer-owned scratch PNG is disposable. Other callers
+    # return PNG paths directly to AstrBot and must keep those files available.
+    path = Path(image_path)
+    try:
+        if path.name.startswith("skland_card_") and path.suffix == ".png" and not path.is_symlink() and path.parent.resolve() == CACHE_DIR.resolve():
+            await asyncio.to_thread(path.unlink, missing_ok=True)
+    except OSError as error:
+        logger.warning("[Priestess] Render scratch cleanup deferred: %s", type(error).__name__)
+    return result
 
 
 def fonts_css() -> str:

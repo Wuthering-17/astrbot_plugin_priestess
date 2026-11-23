@@ -1,17 +1,7 @@
-"""Weekly group report, posted on Sunday 19:00 (Asia/Shanghai).
+"""Sunday 19:00 image reports, with independent game groups and personal opt-outs.
 
-Sections: this week's group essence messages (the bot's own are skipped), weekly task reminders,
-this group's War Echoes speed top 3, rotation countdown and the next rotation, activities opening /
-ending within a week, and gacha pools with time left.
-
-Which groups get it: data/weekly_report/config.json {"groups": [group numbers]}; without that file
-every group the bot is in.
-
-Groups where the bot is admin / owner can get @全体成员 with the scheduled report (the list is
-refreshed daily at 06:00 and re-checked, role + today's @全体 quota, right before sending), but only
-while AT_ALL is True: the owner turned it off on 2026-10-18.
-
-/周报预览   (superuser) render the report for the current chat, never with @全体
+Only verified unfinished Skland progress produces real QQ mentions. All explanations
+and opt-out commands are inside the image. Per-week receipts survive plugin reloads.
 """
 
 from __future__ import annotations
@@ -21,6 +11,7 @@ import base64
 import contextlib
 import io
 import json
+import re
 from datetime import date, datetime, timedelta
 from html import escape
 from pathlib import Path
@@ -34,12 +25,20 @@ from . import ef_theme
 from .endfield_guide.echoes import speed_ranking
 from .guide import CN
 from ..notifications import notification_enabled
+from ..api import SklandAPI
+from ..db import SkUser, get_default_ark_character, get_default_ef_character, get_session, get_user_by_platform
+from ..schemas import CRED
+from ..utils import call_api_with_refresh
+from .weekly_preferences import ALIASES, GAMES, WeeklyPreferences
+from sqlalchemy import select
 
 WIDTH = 1000
 SEND_GAP = 6.0
 ESSENCE_LIMIT = 8
 IMAGE_LIMIT = 10 * 1024 * 1024
 AT_ALL = False  # @全体成员 with the scheduled Sunday report; off at the owner's request since 2026-10-18
+REQUEST_GAP = 1.0
+MENTIONS_PER_IMAGE = 20
 
 
 # ── helpers ─────────────────────────────────────────────────────────────
@@ -96,12 +95,11 @@ def _card(title: str, body: str, note: str = "") -> str:
 # ── sections ────────────────────────────────────────────────────────────
 
 
-def _tasks_section(index: dict, now: datetime) -> str:
+def _tasks_section(index: dict, now: datetime, game_key: str = "endfield") -> str:
     rows = []
     reset = _next_monday_4am(now)
-    rows.append(
-        f'<tr><td class="tag ak"><span>明日方舟</span></td><td><b>剿灭作战、周常任务</b><div class="sub">周一 {reset:%m/%d} 04:00 重置，还剩 {_left(reset, now)}</div></td></tr>'
-    )
+    if game_key == "arknights":
+        return _card("每周任务提醒", f'<table class="list"><tr><td class="tag ak"><span>明日方舟</span></td><td><b>剿灭作战、周常任务</b><div class="sub">周一 {reset:%m/%d} 04:00 重置，还剩 {_left(reset, now)}</div></td></tr></table>')
     weekly = index.get("calendar", {}).get("weekly") or {}
     opened = _parse(weekly.get("open", ""))
     if opened and weekly.get("weeks") and opened <= now:
@@ -400,7 +398,37 @@ td.pl span { font-weight: 700; } td.pl small { display: block; font-size: 13px; 
 """
 
 
-async def build_report(plugin, bot, group_id: int | None, viewer: str | None = None) -> bytes:
+def _pending_section(game: str, pending: list[dict]) -> str:
+    label = "剿灭合成玉奖励未领满" if game == "arknights" else "每周事务未完成"
+    command = "粥" if game == "arknights" else "终"
+    rows = "".join(f'<tr><td>{escape(row["name"])}</td><td>{row["current"]} / {row["total"]}</td></tr>' for row in pending)
+    body = f'<table class="list">{rows}</table>' if rows else '<div class="ef-empty">本次无已确认未完成且允许 @ 的成员</div>'
+    return _card(label, body + f'<div class="sub">以本次森空岛进度为准，查询失败或数据缺失时不 @。<br>取消本游戏 @：<b>/周常提醒 {command} 关</b>；恢复：/周常提醒 {command} 开。<br>关闭两款游戏：/周常提醒 关。仅影响本人 @，群周报图片仍正常发送。</div>')
+
+
+def _ark_calendar_sections(now: datetime) -> str:
+    from .game_calendar.calendar import ARKNIGHTS
+    data = ARKNIGHTS.load()
+    horizon = now + timedelta(days=7)
+    blocks = []
+    for key, title in (("activities", "方舟活动"), ("pools", "方舟卡池")):
+        rows = []
+        for item in data[key]:
+            start, end = item["start"], item.get("end")
+            if start > horizon or (end and end <= now):
+                continue
+            status = f'{start:%m/%d %H:%M} 开启' if start > now else (f'{end:%m/%d %H:%M} 结束 · 还剩 {_left(end, now)}' if end else "进行中")
+            rows.append(f'<div class="evr"><b>{escape(item["name"])}</b><span>{status}</span></div>')
+        blocks.append(_card(title, "".join(rows) or '<div class="ef-empty">暂无可用数据</div>'))
+    return "".join(blocks)
+
+
+async def build_pending_image(game: str, pending: list[dict]) -> bytes:
+    html = f'<!doctype html><meta charset="utf-8"><style>{ef_theme.css()}{CSS % WIDTH}</style><body class="ef">' + ef_theme.head("Weekly Reminder", escape(GAMES[game]) + " · 周日任务提醒") + _pending_section(game, pending) + "</body>"
+    return await ef_theme.render_page(html, WIDTH, height=400)
+
+
+async def build_report(plugin, bot, group_id: int | None, viewer: str | None = None, *, game_key: str = "endfield", pending: list[dict] | None = None) -> bytes:
     now = datetime.now(CN)
     week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
     loaded = plugin.wiki.resolver()
@@ -411,25 +439,26 @@ async def build_report(plugin, bot, group_id: int | None, viewer: str | None = N
     else:
         names = {viewer: "你"} if viewer else {}
     pool = set(names) - plugin.guide.echo_store.optout()
-    sections = [
-        await _essence_section(bot, group_id, week_start, names),
-        _tasks_section(index, now),
-        await _speed_section(index, now, pool, names, plugin.guide),
-        _rotation_section(index, now),
-        _events_section(index, now),
-        _pools_section(index, now),
-    ]
+    sections = [await _essence_section(bot, group_id, week_start, names), _tasks_section(index, now, game_key)]
+    if game_key == "arknights":
+        sections.append(_ark_calendar_sections(now))
+    else:
+        sections.extend([await _speed_section(index, now, pool, names, plugin.guide), _rotation_section(index, now), _events_section(index, now), _pools_section(index, now)])
+    if pending is not None:
+        sections.append(_pending_section(game_key, pending))
+    else:
+        sections.append(_card("周常 @ 设置", f'<div class="sub">取消本人 @：/周常提醒 {"粥" if game_key == "arknights" else "终"} 关；恢复请把关改成开。预览不会 @ 任何成员。</div>'))
     week_end = week_start + timedelta(days=6)
     html = (
         f'<!doctype html><html><head><meta charset="utf-8"><style>{ef_theme.css()}{CSS % WIDTH}</style></head><body class="ef">'
         + ef_theme.head(
-            "Endfield · Weekly Report",
-            "普瑞赛斯 <em>周报</em>",
+            ("Arknights" if game_key == "arknights" else "Endfield") + " · Weekly Report",
+            escape(GAMES[game_key]) + " <em>周报</em>",
             f"{week_start:%Y/%m/%d} – {week_end:%m/%d} · 本周回顾与下周预告",
             f'WEEK<b>{week_start:%y}-W{week_start.isocalendar().week:02d}</b>',
         )
         + "".join(sections)
-        + ef_theme.foot(f'关卡、活动与卡池数据来自 AKEData（版本 {escape(index.get("version", ""))}），竞速记录来自森空岛，每天 05:30、17:30 更新<br>每周日 19:00 发送 · 全部指令发 /skl帮助')
+        + ef_theme.foot(('活动与卡池：ArknightsGameResource / PRTS Wiki' if game_key == "arknights" else f'关卡、活动与卡池：AKEData（版本 {escape(index.get("version", ""))}）；竞速记录：森空岛') + '<br>每周日 19:00 发送 · 全部指令发 /skl帮助')
         + "</body></html>"
     )
     return await ef_theme.render_page(html, WIDTH, height=600, template_path=plugin.wiki.data_dir.resolve().as_uri())
@@ -443,6 +472,8 @@ class _OneBotClient:
 
     async def call_api(self, action: str, **kwargs):
         result = await self.client.call_action(action, **kwargs)
+        if isinstance(result, dict) and (result.get("status") == "failed" or result.get("retcode", 0) not in (0, None)):
+            raise RuntimeError("OneBot action rejected")
         if isinstance(result, dict) and "data" in result:
             return result["data"]
         return result
@@ -463,6 +494,12 @@ class _OneBotClient:
         if at_all:
             message.append({"type": "at", "data": {"qq": "all"}})
             message.append({"type": "text", "data": {"text": " "}})
+        message.append({"type": "image", "data": {"file": "base64://" + base64.b64encode(image).decode("ascii")}})
+        return await self.call_api("send_group_msg", group_id=int(group_id), message=message)
+
+    async def send_weekly_image(self, group_id: int, image: bytes, mentions: list[str]):
+        # Actual QQ mentions accompany the image; all explanations stay inside it.
+        message = [{"type": "at", "data": {"qq": qq}} for qq in mentions]
         message.append({"type": "image", "data": {"file": "base64://" + base64.b64encode(image).decode("ascii")}})
         return await self.call_api("send_group_msg", group_id=int(group_id), message=message)
 
@@ -540,23 +577,7 @@ async def _send_report(bot: _OneBotClient, group_id: int, image: bytes, at_all: 
 
 
 async def send_all(plugin, bot: _OneBotClient, admin_file: Path, config_file: Path, at_all: bool = False) -> dict[str, int]:
-    stats = {"ok": 0, "fail": 0, "at_all": 0}
-    if not notification_enabled(plugin, "weekly_report"):
-        return stats
-    wanted = _report_groups(config_file)
-    for group in await bot.get_group_list():
-        group_id = int(group["group_id"])
-        if wanted is not None and group_id not in wanted:
-            continue
-        try:
-            image = await build_report(plugin, bot, group_id)
-            stats["at_all"] += await _send_report(bot, group_id, image, at_all, admin_file)
-            stats["ok"] += 1
-        except Exception as error:
-            stats["fail"] += 1
-            logger.warning("Weekly report failed for group %s: %s", group_id, type(error).__name__)
-        await asyncio.sleep(SEND_GAP)
-    return stats
+    return await plugin.weekly_report.send_for_bot(bot)
 
 
 class WeeklyReport:
@@ -566,49 +587,149 @@ class WeeklyReport:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.admin_file = self.data_dir / "admin_groups.json"
         self.config_file = self.data_dir / "config.json"
+        self.delivery_file = self.data_dir / "delivery.json"
+        self.preferences = WeeklyPreferences(self.data_dir / "mention_preferences.json")
+        self._send_lock = asyncio.Lock()
+        self.now = lambda: datetime.now(CN)
         self._last_admin_day: date | None = None
         self._last_weekly_day: date | None = None
 
-    async def preview(self, event: AstrMessageEvent) -> str:
+    async def preview(self, event: AstrMessageEvent, game: str = "") -> str:
+        game_key = ALIASES.get(game.lower(), "endfield" if not game else "")
+        if not game_key:
+            raise ValueError("用法：/周报预览 粥 或 /周报预览 终")
         bot = _current_bot(self.plugin, event.get_platform_id())
         if bot is None:
             raise RuntimeError("未连接 OneBot v11 平台")
         group_id = int(event.get_group_id()) if event.get_group_id() else None
-        image = await build_report(self.plugin, bot, group_id, event.get_sender_id())
+        image = await build_report(self.plugin, bot, group_id, event.get_sender_id(), game_key=game_key)
         path = self.data_dir / f"preview-{event.get_sender_id()}.png"
         path.write_bytes(image)
         return str(path.resolve())
 
+    def groups(self, game: str) -> set[str]:
+        raw = str(self.plugin.plugin_config.get(f"weekly_report_{game}_groups", ""))
+        return {part for part in re.split(r"[,，;；\s]+", raw) if part.isdigit() and len(part) <= 12 and int(part) > 0}
+
+    def enabled(self, game: str) -> bool:
+        return notification_enabled(self.plugin, "weekly_report") and notification_enabled(self.plugin, f"weekly_report_{game}")
+
+    def _state(self, now: datetime) -> dict:
+        week = (now - timedelta(days=now.weekday())).date().isoformat()
+        try:
+            state = json.loads(self.delivery_file.read_text("utf-8"))
+            if not isinstance(state, dict) or not isinstance(state.get("deliveries"), dict):
+                raise ValueError("invalid weekly delivery state")
+        except FileNotFoundError:
+            state = {}
+        return state if state.get("week") == week else {"week": week, "deliveries": {}}
+
+    def _save_state(self, state: dict) -> None:
+        temporary = self.delivery_file.with_suffix(".tmp")
+        temporary.write_text(json.dumps(state, ensure_ascii=False), "utf-8")
+        temporary.replace(self.delivery_file)
+
+    async def _fetch_progress(self, qq: str, game: str) -> tuple[int, int] | None:
+        async with await get_session() as session:
+            user = await get_user_by_platform(session, qq)
+            if user is None:
+                return None
+            char = await (get_default_ark_character(session, user) if game == "arknights" else get_default_ef_character(session, user))
+            if char is None:
+                return None
+            cred = CRED(cred=user.cred, token=user.cred_token)
+            if game == "arknights":
+                card = await asyncio.wait_for(call_api_with_refresh(user, SklandAPI.ark_card, cred, str(char.uid)), timeout=30)
+                current, total = card.campaign.reward.current, card.campaign.reward.total
+            else:
+                card = await asyncio.wait_for(call_api_with_refresh(user, SklandAPI.endfield_card, cred, user.user_id or user.platform_user_id, char), timeout=30)
+                current, total = card.weeklyMission.score, card.weeklyMission.total
+            await session.commit()
+            # A default/missing total must never become an "unfinished" judgment.
+            if not isinstance(current, int) or not isinstance(total, int) or current < 0 or total <= 0:
+                return None
+            return current, total
+
+    async def _pending(self, bot, group_id: str, game: str, cache: dict, handled: set[str]) -> tuple[list[dict], bool]:
+        if not notification_enabled(self.plugin, f"weekly_mentions_{game}"):
+            return [], False
+        members = await bot.get_group_member_list(group_id=int(group_id))
+        names = {str(m["user_id"]): str(m.get("card") or m.get("nickname") or m["user_id"]) for m in members if str(m["user_id"]).isdigit()}
+        candidates = [qq for qq in names if qq != getattr(bot, "self_id", "") and qq not in handled and self.preferences.enabled(qq, game)]
+        if not candidates:
+            return [], False
+        async with await get_session() as session:
+            bound = list((await session.execute(select(SkUser.platform_user_id).where(SkUser.platform_user_id.in_(candidates)))).scalars())
+        pending, failed = [], False
+        for qq in sorted(bound):
+            key = (qq, game)
+            if key not in cache:
+                try:
+                    cache[key] = (await self._fetch_progress(qq, game), False)
+                except Exception as error:
+                    cache[key] = (None, True)
+                    logger.warning("[Priestess] Weekly %s progress query failed: %s", game, type(error).__name__)
+                await asyncio.sleep(REQUEST_GAP)
+            progress, error = cache[key]
+            failed |= error
+            if progress is not None and progress[0] < progress[1]:
+                pending.append({"qq": qq, "name": names[qq], "current": progress[0], "total": progress[1]})
+        return pending, failed
+
+    async def send_for_bot(self, bot: _OneBotClient, cache: dict | None = None) -> dict[str, int]:
+        stats = {"ok": 0, "fail": 0, "at_all": 0}
+        cache = {} if cache is None else cache
+        async with self._send_lock:
+            now = self.now()
+            state = self._state(now)
+            for game in GAMES:
+                if not self.enabled(game):
+                    continue
+                for group_id in sorted(self.groups(game)):
+                    key = f"{game}:{group_id}"
+                    delivered = state["deliveries"].setdefault(key, {"report": False, "mentions": [], "done": False})
+                    if delivered["done"]:
+                        continue
+                    try:
+                        pending, failed = await self._pending(bot, group_id, game, cache, set(delivered["mentions"]))
+                        pending = [p for p in pending if p["qq"] not in delivered["mentions"]]
+                        while pending or not delivered["report"]:
+                            if not self.enabled(game) or group_id not in self.groups(game) or self.now().date() != now.date():
+                                break
+                            # Re-read choices after API awaits, so a cancellation takes effect immediately.
+                            pending = [p for p in pending if self.preferences.enabled(p["qq"], game)] if notification_enabled(self.plugin, f"weekly_mentions_{game}") else []
+                            batch, pending = pending[:MENTIONS_PER_IMAGE], pending[MENTIONS_PER_IMAGE:]
+                            if delivered["report"] and not batch:
+                                break
+                            image = await (build_pending_image(game, batch) if delivered["report"] else build_report(self.plugin, bot, int(group_id), game_key=game, pending=batch))
+                            # Rendering also awaits; do not mention somebody who opted out while it ran.
+                            mentions = [p["qq"] for p in batch if self.preferences.enabled(p["qq"], game)] if notification_enabled(self.plugin, f"weekly_mentions_{game}") else []
+                            if not self.enabled(game) or group_id not in self.groups(game) or self.now().date() != now.date():
+                                break
+                            await bot.send_weekly_image(int(group_id), image, mentions)
+                            delivered["report"] = True
+                            delivered["mentions"] = sorted(set(delivered["mentions"]) | set(mentions))
+                            self._save_state(state)
+                            stats["ok"] += 1
+                            await asyncio.sleep(SEND_GAP)
+                        if delivered["report"] and not pending and not failed:
+                            delivered["done"] = True
+                            self._save_state(state)
+                    except Exception as error:
+                        stats["fail"] += 1
+                        logger.warning("[Priestess] Weekly %s image failed for group %s: %s", game, group_id, type(error).__name__)
+        return stats
+
     async def run(self, stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():
-            now = datetime.now(CN)
-            if now.hour == 6 and self._last_admin_day != now.date():
-                self._last_admin_day = now.date()
-                await self._refresh_all()
-                continue
-            if now.weekday() == 6 and now.hour == 19 and now.minute < 10 and self._last_weekly_day != now.date():
-                self._last_weekly_day = now.date()
+            now = self.now()
+            # Persistent per-game/group/member receipts also cover individual plugin reloads.
+            if now.weekday() == 6 and now.hour >= 19:
                 await self._send_all()
-                continue
-            admin_check = now.replace(hour=6, minute=0, second=0, microsecond=0)
-            if admin_check <= now:
-                admin_check += timedelta(days=1)
-            days_to_sunday = (6 - now.weekday()) % 7
-            weekly = (now + timedelta(days=days_to_sunday)).replace(hour=19, minute=0, second=0, microsecond=0)
-            if weekly <= now:
-                weekly += timedelta(days=7)
-            run_at = min(admin_check, weekly)
             try:
-                await asyncio.wait_for(stop_event.wait(), timeout=max(1, (run_at - now).total_seconds()))
-                return
+                await asyncio.wait_for(stop_event.wait(), timeout=300)
             except asyncio.TimeoutError:
                 pass
-            if run_at == admin_check:
-                self._last_admin_day = datetime.now(CN).date()
-                await self._refresh_all()
-            else:
-                self._last_weekly_day = datetime.now(CN).date()
-                await self._send_all()
 
     async def _refresh_all(self) -> None:
         for platform in self.plugin.context.platform_manager.get_insts():
@@ -620,13 +741,13 @@ class WeeklyReport:
                 logger.warning("Weekly report admin list refresh failed: %s", type(error).__name__)
 
     async def _send_all(self) -> None:
+        cache = {}
         for platform in self.plugin.context.platform_manager.get_insts():
             if platform.meta().name != "aiocqhttp" or not hasattr(platform, "get_client"):
                 continue
             bot = _OneBotClient(platform.get_client(), platform.meta().id)
             try:
-                await refresh_admin_groups(bot, self.admin_file)
-                stats = await send_all(self.plugin, bot, self.admin_file, self.config_file, at_all=AT_ALL)
+                stats = await self.send_for_bot(bot, cache)
                 logger.info("Weekly report sent: %s", stats)
             except Exception as error:
                 logger.warning("Weekly report run failed: %s", type(error).__name__)

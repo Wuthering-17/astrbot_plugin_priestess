@@ -26,6 +26,7 @@ third-party works. Each remains under its own license.
 - Original author: Billtranscend and upstream contributors.
 - Adaptation base: commit `59e2be8ee0006a031a903cce1d7b2d72138ba8f5`.
 - Collection and rendering-timeout improvements synchronized from `10419ecb8ea970326dcff5be3513c5ffb4edffda` (2026-10-24); adapted for AstrBot in v0.1.18.
+- The Arknights roster style, Stronghold Protocol charts, and personal clear refresh in v0.1.19 were adapted from `fc05c2a7cb0cd6be32afe9e31e1f5255a3c923f4` (2026-11-20).
 - Used in: AstrBot adaptations under `priestess_features/` and the derived
   help image in `resources/help/`, with the upstream Git history retained.
 - The duplicate NoneBot runtime tree was removed from the AstrBot release in
@@ -69,6 +70,7 @@ SOFTWARE.
 ## nonebot-plugin-skland
 
 - Source: https://github.com/FrostN0v0/nonebot-plugin-skland
+- Stronghold Protocol API and data model are adapted from v0.7.4.
 - The Arknights Heybox export format and pool-name mapping in
   `priestess_features/ark_heybox.py` follow this project's `services/gacha.py`.
 - Static images bundled under `resources/images/ark_card/`, `endfield/`, `rogue/`

@@ -4,6 +4,7 @@ Set ASTRBOT_SOURCE to an AstrBot checkout if AstrBot is not installed as a packa
 All state is created in a temporary directory; no live account is used.
 """
 import asyncio
+import atexit
 import importlib
 import os
 from pathlib import Path
@@ -17,6 +18,11 @@ from unittest.mock import AsyncMock, patch
 REPO = Path(__file__).resolve().parents[1]
 TEMP = tempfile.TemporaryDirectory(prefix="priestess-test-")
 os.environ["ASTRBOT_ROOT"] = TEMP.name
+# Plugin storage is relative to the working directory, not only ASTRBOT_ROOT.
+# Restore it before TemporaryDirectory's process-exit cleanup on Windows.
+original_cwd = os.getcwd()
+os.chdir(TEMP.name)
+atexit.register(os.chdir, original_cwd)
 if os.environ.get("ASTRBOT_SOURCE"):
     sys.path.insert(0, os.environ["ASTRBOT_SOURCE"])
 package = types.ModuleType("priestess_under_test")
@@ -104,6 +110,50 @@ class UpstreamSyncTests(unittest.IsolatedAsyncioTestCase):
             await self.store.collect(self.builds, builds_only=True)
         self.assertEqual({url for url, _ in requested}, {builds.CARD_URL})
 
+    async def test_personal_speed_refresh_preserves_failed_source_and_other_members(self):
+        await self.bind(2)
+        previous = {"time": 12, "collected_at": 1}
+        old = {"ts": 1, "sources": {"monument": {"ts": 1, "records": {"old": previous}}}, "records": {"old": previous}}
+        self.store._save({"members": {"0": old, "1": old}, "targets": {}})
+
+        async def fetch(url, user, char):
+            self.assertEqual(char.uid, "0")
+            if url == echoes.WAR_ECHOES_URL:
+                return {"warEchoes": {}}
+            raise echoes.RecordError("fixture")
+
+        with patch.object(echoes, "_fetch", side_effect=fetch) as request, patch.object(echoes, "REQUEST_GAP", 0):
+            self.assertIn("战争回响战绩已刷新", await self.store.refresh_member("0"))
+            members = self.store.load()["members"]
+            self.assertEqual(members["0"]["records"], {"old": previous})
+            self.assertEqual(members["1"], old)
+            self.assertIn("秒后", await self.store.refresh_member("0"))
+            self.store.set_optout("0", True)
+            self.assertIn("已退出", await self.store.refresh_member("0"))
+            self.assertEqual(request.await_count, 2)
+        self.assertEqual(self.store.load()["members"], {"1": old})
+
+    async def test_personal_refresh_lock_and_concurrent_optout(self):
+        await self.bind(1)
+        arrived, proceed = asyncio.Event(), asyncio.Event()
+
+        async def fetch(url, user, char):
+            arrived.set()
+            await proceed.wait()
+            return {"warEchoes": {}, "indieHard": {}}
+
+        with patch.object(echoes, "_fetch", side_effect=fetch), patch.object(echoes, "REQUEST_GAP", 0):
+            pending = asyncio.create_task(self.store.refresh_member("0"))
+            try:
+                await asyncio.wait_for(arrived.wait(), 2)
+                self.assertIn("正在采集", await self.store.refresh_member("0"))
+                self.store.set_optout("0", True)
+            finally:
+                proceed.set()
+                result = await pending
+        self.assertIn("已退出", result)
+        self.assertEqual(self.store.load()["members"], {})
+
     async def test_worker_failure_waits_for_cancellation_before_final_save(self):
         await self.bind(7)
         stopped = asyncio.Event()
@@ -165,7 +215,7 @@ class UpstreamSyncTests(unittest.IsolatedAsyncioTestCase):
     async def test_reload_starts_existing_jobs_without_external_messages(self):
         from contextlib import ExitStack
         plugin = main.SklandPlugin(types.SimpleNamespace())
-        names = ("auto_sign", "wiki_sync", "calendar", "guide_collection", "stamina_alert", "sanity_reminder", "weekly_report", "health")
+        names = ("auto_sign", "wiki_sync", "calendar", "guide_collection", "stamina_alert", "sanity_reminder", "weekly_report", "health", "garrison")
         with ExitStack() as stack:
             stack.enter_context(patch.object(main, "init_db", AsyncMock()))
             starters = [stack.enter_context(patch.object(plugin, f"_start_{name}_loop")) for name in names]

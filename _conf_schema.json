@@ -35,10 +35,44 @@
         "hint": "填写接收终末地活动开启图片的 QQ 群号，多个群用逗号分隔；留空不自动发送。还需开启终末地活动通知及主动提醒总开关。"
     },
     "notify_weekly_report": {
-        "description": "群周报：定时发送",
+        "description": "周日图片周报：总开关",
         "type": "bool",
         "default": true,
         "hint": "关闭不影响手动发送 /周报预览。"
+    },
+    "notify_weekly_report_arknights": {
+        "description": "明日方舟：周日图片提醒",
+        "type": "bool",
+        "default": true
+    },
+    "weekly_report_arknights_groups": {
+        "description": "明日方舟：周日图片提醒发送群",
+        "type": "string",
+        "default": "",
+        "hint": "多个 QQ 群号用逗号分隔；留空不发。每周日 19:00 发方舟周报图片；不再使用旧 weekly_report/config.json 群列表。"
+    },
+    "notify_weekly_mentions_arknights": {
+        "description": "明日方舟：周日 @ 剿灭奖励未领满成员",
+        "type": "bool",
+        "default": true,
+        "hint": "仅检查发送群内绑定成员的默认方舟角色，未知或查询失败不 @；本人可发 /周常提醒 粥 关 取消，周报图片继续发送。"
+    },
+    "notify_weekly_report_endfield": {
+        "description": "终末地：周日图片提醒",
+        "type": "bool",
+        "default": true
+    },
+    "weekly_report_endfield_groups": {
+        "description": "终末地：周日图片提醒发送群",
+        "type": "string",
+        "default": "",
+        "hint": "多个 QQ 群号用逗号分隔；留空不发。每周日 19:00 发终末地周报图片；与方舟群列表独立。"
+    },
+    "notify_weekly_mentions_endfield": {
+        "description": "终末地：周日 @ 每周事务未完成成员",
+        "type": "bool",
+        "default": true,
+        "hint": "按默认终末地角色的森空岛 weeklyMission 进度判断，不推断通行证任务；未知或查询失败不 @，本人可发 /周常提醒 终 关 取消。"
     },
     "notify_sanity_arknights": {
         "description": "明日方舟：理智回满群提醒",

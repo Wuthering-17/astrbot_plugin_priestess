@@ -5,7 +5,7 @@ import hashlib
 import contextlib
 from typing import Literal
 from datetime import datetime
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 
 import httpx
@@ -16,6 +16,7 @@ from ..network_clock import network_clock
 
 
 from ..exception import LoginException, RequestException, UnauthorizedException
+from ..schemas.arknights.garrison import GarrisonData, GarrisonResources
 from ..schemas import (
     CRED,
     ArkCard,
@@ -43,6 +44,33 @@ class SklandAPI:
     }
 
     _header_for_sign = {"platform": "", "timestamp": "", "dId": "", "vName": ""}
+
+    @classmethod
+    async def _garrison_request(cls, cred: CRED, path: str, model: type[GarrisonData] | type[GarrisonResources]):
+        url = f"https://zonai.skland.com/api/ms/game/arknights/garrison/{path}"
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                headers = await cls.get_sign_header(cred, url, method="get")
+                response = await client.get(url, headers=headers)
+                payload = response.json()
+                if not isinstance(payload, dict):
+                    raise ValueError("invalid garrison response")
+                cls._check_response(payload, "获取卫戍协议数据失败")
+                response.raise_for_status()
+                return model.model_validate(payload.get("data"))
+        except httpx.HTTPError:
+            raise RequestException("获取卫戍协议数据失败：网络请求失败") from None
+        except ValueError:
+            raise RequestException("获取卫戍协议数据失败：接口响应格式异常") from None
+
+    @classmethod
+    async def ark_garrison_resources(cls, cred: CRED) -> GarrisonResources:
+        return await cls._garrison_request(cred, "resource", GarrisonResources)
+
+    @classmethod
+    async def ark_garrison(cls, cred: CRED, uid: str, activity_id: str) -> GarrisonData:
+        query = urlencode({"uid": uid, "activityId": activity_id})
+        return await cls._garrison_request(cred, f"info?{query}", GarrisonData)
 
     @staticmethod
     def _check_response(resp_json: dict, action: str):

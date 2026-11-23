@@ -73,6 +73,8 @@ from .recruit_data import RECRUIT_TAG_COUNT
 from .recruit_calc import normalize_tags, calculate_combinations, format_recommendation
 from .recruit_vision import recognize_tags_from_image
 from .priestess_features.wiki import EndfieldWiki
+from .priestess_features.ark_garrison import ArkGarrison, parse_choice as parse_garrison_choice
+from .priestess_features.ark_roster import render_ark_roster
 from .priestess_features.roster import render_ef_roster
 from .priestess_features.guide import CN, EndfieldGuide
 from .priestess_features.gacha_rank import GachaRank
@@ -359,6 +361,9 @@ class SklandPlugin(Star):
         self.guide = EndfieldGuide(self, self.wiki, self.data_dir)
         self._guide_task = None
         self._guide_stop_event = asyncio.Event()
+        self.garrison = ArkGarrison(self.data_dir)
+        self._garrison_task = None
+        self._garrison_stop_event = asyncio.Event()
         self.calendar = AstrBotCalendar(self, self.wiki, self.data_dir)
         self.heybox = HeyboxImporter(self, self.data_dir)
         self.ark_heybox = ArkHeyboxImporter(self)
@@ -382,6 +387,7 @@ class SklandPlugin(Star):
         self._start_sanity_reminder_loop()
         self._start_weekly_report_loop()
         self._start_health_loop()
+        self._start_garrison_loop()
 
     @filter.on_astrbot_loaded()
     async def on_loaded(self):
@@ -415,6 +421,7 @@ class SklandPlugin(Star):
         self._start_calendar_loop()
         self._start_weekly_report_loop()
         self._start_health_loop()
+        self._start_garrison_loop()
 
     @filter.event_message_type(filter.EventMessageType.OTHER_MESSAGE)
     async def on_onebot_group_lifecycle(self, event: AstrMessageEvent):
@@ -457,7 +464,8 @@ class SklandPlugin(Star):
         self._calendar_stop_event.set()
         self._weekly_stop_event.set()
         self._health_stop_event.set()
-        tasks = [task for task in (self._alert_task, self._sanity_task, self._auto_sign_task, self._wiki_task, self._guide_task, self._calendar_task, self._weekly_task, self._health_task) if task and not task.done()]
+        self._garrison_stop_event.set()
+        tasks = [task for task in (self._alert_task, self._sanity_task, self._auto_sign_task, self._wiki_task, self._guide_task, self._calendar_task, self._weekly_task, self._health_task, self._garrison_task) if task and not task.done()]
         for task in tasks:
             task.cancel()
         if tasks:
@@ -546,6 +554,12 @@ class SklandPlugin(Star):
             return
         self._health_stop_event.clear()
         self._health_task = asyncio.create_task(self.health.run_weekly(self._health_stop_event))
+
+    def _start_garrison_loop(self):
+        if self._garrison_task and not self._garrison_task.done():
+            return
+        self._garrison_stop_event.clear()
+        self._garrison_task = asyncio.create_task(self.garrison.run(self._garrison_stop_event))
 
     @staticmethod
     def _format_error(e: Exception) -> str:
@@ -670,11 +684,22 @@ class SklandPlugin(Star):
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def cmd_weekly_report_preview(self, event: AstrMessageEvent):
         try:
-            image_path = await self.weekly_report.preview(event)
+            image_path = await self.weekly_report.preview(event, self._command_argument(event).strip())
             yield event.image_result(image_path)
+        except ValueError as error:
+            yield event.plain_result(str(error))
         except Exception as error:
             logger.exception("[Priestess] Weekly report preview failed")
             yield event.plain_result(f"周报预览生成失败：{type(error).__name__}")
+        event.stop_event()
+
+    @filter.command("周常提醒", alias={"周提醒", "周常艾特"}, priority=10)
+    async def cmd_weekly_mentions(self, event: AstrMessageEvent):
+        if event.get_platform_name() != "aiocqhttp":
+            yield event.plain_result("周常 @ 设置仅支持 QQ OneBot v11，请用本人的 QQ 操作。")
+            event.stop_event()
+            return
+        yield event.plain_result(await self.weekly_report.preferences.configure(str(event.get_sender_id()), self._command_argument(event).strip()))
         event.stop_event()
 
     @filter.command("森空岛体检")
@@ -800,6 +825,69 @@ class SklandPlugin(Star):
     async def cmd_arkcard_alias(self, event: AstrMessageEvent):
         async for result in self._forward_command(event, self.cmd_arkcard):
             yield result
+
+    @filter.command("明日方舟开盒", alias={"方舟开盒", "mrfz开盒", "mrfz查询"})
+    async def cmd_arkroster(self, event: AstrMessageEvent):
+        async for result in self._ark_card(event, full_roster=True):
+            yield result
+
+    @filter.command("卫", alias={"卫戍战绩", "mrfz卫戍", "卫戍协议", "方舟卫戍", "明日方舟卫戍", "mrfz卫戍协议"})
+    async def cmd_garrison(self, event: AstrMessageEvent):
+        target, error = await self._card_target(event)
+        if error:
+            yield event.plain_result(error)
+            event.stop_event()
+            return
+        try:
+            favored, show_all, menu, record, page = parse_garrison_choice(self._command_argument(event))
+            async with await get_session() as session:
+                user = await get_user_by_platform(session, target)
+                if not user:
+                    yield event.plain_result("该用户尚未绑定森空岛账号。")
+                    return
+                char = await self._selected_character(session, user, "arknights", event)
+                if not char:
+                    yield event.plain_result("未找到对应方舟角色，请用 /skl角色 查看绑定和序号。")
+                    return
+                try:
+                    view = await self.garrison.view(user, char, favored, record)
+                finally:
+                    await session.commit()
+            paths, message = await self.garrison.history(view, show_all, menu, page)
+            async for result in self._send_gacha_images(event, paths, "卫戍协议战绩"):
+                yield result
+            if message:
+                yield event.plain_result(message)
+        except ValueError as error:
+            yield event.plain_result(str(error))
+        except Exception as error:
+            logger.warning("[Priestess] Garrison history query failed: %s", type(error).__name__)
+            yield event.plain_result(self._sk(self._format_error(error)))
+        finally:
+            event.stop_event()
+
+    @filter.command("卫戍榜", alias={"卫戍协议榜"})
+    async def cmd_garrison_board(self, event: AstrMessageEvent):
+        action = self._command_argument(event)
+        qq = str(event.get_sender_id())
+        try:
+            if not action:
+                yield event.image_result(await self.garrison.board(event))
+                return
+            if action == "更新":
+                message = await self.garrison.refresh(qq)
+            elif action in {"退出", "加入"}:
+                message = self.garrison.optout(qq, action == "退出")
+            elif action == "刷新":
+                message = await self.garrison.collect() if event.is_admin() else "需要 AstrBot 管理员权限。"
+            else:
+                message = "用法：/卫戍榜 [更新｜退出｜加入]"
+            yield event.plain_result(message)
+        except Exception:
+            logger.exception("[Priestess] Garrison board command failed")
+            yield event.plain_result("卫戍榜暂时不可用，请稍后重试。")
+        finally:
+            event.stop_event()
 
     @filter.command("终末地卡片", alias={"zmd卡片", "ef卡片", "zmd开盒", "终末地开盒", "zmd账号详情", "ef账号详情", "终末地账号详情", "账号详情"})
     async def cmd_efcard_alias(self, event: AstrMessageEvent):
@@ -954,6 +1042,19 @@ class SklandPlugin(Star):
     async def cmd_speed_board(self, event: AstrMessageEvent):
         async for result in self._send_guide_page(event, "竞速榜", self._command_argument(event)):
             yield result
+
+    @filter.command("竞速更新", alias={"更新竞速"})
+    async def cmd_speed_refresh(self, event: AstrMessageEvent):
+        if self._command_argument(event):
+            yield event.plain_result("发送 /竞速更新 可刷新自己的默认终末地角色战绩。")
+        else:
+            try:
+                message = await self.guide.echo_store.refresh_member(str(event.get_sender_id()))
+            except Exception:
+                logger.exception("[Priestess] Personal clear refresh failed")
+                message = "竞速记录更新失败，请稍后再试。"
+            yield event.plain_result(message)
+        event.stop_event()
 
     @filter.command("回响竞速", alias={"战争回响竞速"})
     async def cmd_echo_speed(self, event: AstrMessageEvent):
@@ -1868,6 +1969,10 @@ class SklandPlugin(Star):
     @sk.command("arkcard")
     async def cmd_arkcard(self, event: AstrMessageEvent):
         """明日方舟卡片  用法: /sk arkcard"""
+        async for result in self._ark_card(event, full_roster=False):
+            yield result
+
+    async def _ark_card(self, event: AstrMessageEvent, *, full_roster: bool):
         sender_id, error = await self._card_target(event)
         if error:
             yield event.plain_result(error)
@@ -1898,14 +2003,16 @@ class SklandPlugin(Star):
                 event.stop_event()
                 return
 
-            try:
-                bg_path = self._get_bg_path("ark")
-                image_path = await render_ark_card(self, card_data, bg_path)
-                yield event.image_result(image_path)
-            except Exception as e:
-                logger.exception(f"[Skland] 渲染方舟卡片失败: {e}")
-                yield event.plain_result(self._sk(f"卡片渲染失败: {e}"))
-            event.stop_event()
+        try:
+            if full_roster:
+                image_path = await render_ark_roster(card_data)
+            else:
+                image_path = await render_ark_card(self, card_data, self._get_bg_path("ark"))
+            yield event.image_result(image_path)
+        except Exception as e:
+            logger.exception(f"[Skland] 渲染方舟卡片失败: {e}")
+            yield event.plain_result(self._sk(f"卡片渲染失败: {e}"))
+        event.stop_event()
 
     @sk.command("efcard")
     async def cmd_efcard(self, event: AstrMessageEvent):

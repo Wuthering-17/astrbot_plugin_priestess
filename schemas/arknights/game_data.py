@@ -39,3 +39,5 @@ class CharTable(BaseModel):
     """角色ID"""
     name: str
     """角色名称"""
+    rarity: int | str | None = None
+    profession: str = ""
